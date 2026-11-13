@@ -1,24 +1,29 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
+import { getToken, getUsuario } from '../utils/auth'
 
-type FilterTab = 'Todos' | 'Crítico' | 'Aberto' | 'Em Curso' | 'Finalizado'
-type OccurrenceStatus = 'critico' | 'resolucao' | 'aberto' | 'resolvido'
+type FilterTab = 'Todos' | 'Crítico' | 'Aberto' | 'Finalizado'
+type OccurrenceStatus = 'critico' | 'aberto' | 'resolvido'
 
 interface Occurrence {
-  id: string
+  id: number
+  projetoId: number
   ticket: string
   title: string
   address: string
   teamShort: string
   teamFull: string
-  teamAvatar: string
+  teamInitials: string
   status: OccurrenceStatus
   badgeLabel: string
   timestamp: string
   reportedAtFull: string
   shortDescription: string
   fullDescription: string
+  solucaoAplicada: string
+  bloqueiaObra: boolean
+  resolvida: boolean
   footerNote: string
   footerType: 'muted' | 'resolved'
   actionLabel: string
@@ -26,130 +31,226 @@ interface Occurrence {
   images: string[]
 }
 
+interface ProjetoOption {
+  id: number
+  label: string
+}
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+const FALLBACK_IMG =
+  'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=800&q=80'
+
+const usuarioLogado = getUsuario()
+const nomeUsuario = computed(() => usuarioLogado?.nome || 'Gestor')
+const cargoUsuario = computed(() =>
+  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Técnico de Campo'
+)
+const iniciaisUsuario = computed(() =>
+  nomeUsuario.value
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase())
+    .join('')
+)
+
 const searchQuery = ref<string>('')
 const activeTab = ref<FilterTab>('Todos')
-const selectedPeriod = ref<string>('Últimos 30 dias')
+const selectedPeriod = ref<string>('Todos')
 const selectedTeam = ref<string>('Todas Equipes')
-const isDrawerOpen = ref<boolean>(true)
-const selectedOccurrenceId = ref<string>('1')
+const isDrawerOpen = ref<boolean>(false)
+const selectedOccurrenceId = ref<number | null>(null)
 const selectedPhotoIndex = ref<number>(0)
 const photoInputRef = ref<HTMLInputElement | null>(null)
-const saveFeedback = ref<boolean>(false)
+const saveFeedback = ref<string | null>(null)
+const carregando = ref<boolean>(false)
+const resolvendo = ref<boolean>(false)
+const solucaoInput = ref<string>('')
 
-const filterTabs: FilterTab[] = ['Todos', 'Crítico', 'Aberto', 'Em Curso', 'Finalizado']
+// Modal Nova Ocorrência
+const showCreateModal = ref<boolean>(false)
+const criandoOcorrencia = ref<boolean>(false)
+const novoProjetoId = ref<number>(0)
+const novoTitulo = ref<string>('')
+const novoTipo = ref<string>('TECNICA')
+const novaSeveridade = ref<string>('MEDIA')
+const novaDescricao = ref<string>('')
+const novaFotoUrl = ref<string>('')
+const novoBloqueiaObra = ref<boolean>(false)
 
-const occurrences = ref<Occurrence[]>([
-  {
-    id: '1',
-    ticket: '#49210',
-    title: 'Residencial Aurora - Apto 402',
-    address: 'Av. das Nações, 1420 - Bloco B',
-    teamShort: 'Equipe Alfa',
-    teamFull: 'Equipe Alfa (Marcos/Sandro)',
-    teamAvatar:
-      'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=100&q=80',
-    status: 'critico',
-    badgeLabel: 'ABERTO - CRÍTICO',
-    timestamp: '15 OUT, 09:30',
-    reportedAtFull: '15/10/2023 às 09:30',
-    shortDescription:
-      'Infiltração identificada no trilho inferior da porta de correr. Guarnição de borracha apresenta folga de 5mm no canto esquerdo superior.',
-    fullDescription:
-      'Infiltração grave identificada pela equipe durante a vistoria final. A água está penetrando pela junção do marco com a alvenaria. Suspeita de falha na aplicação do selante PU ou desnível no contramarco. O cliente está solicitando reparo imediato antes da pintura final.',
-    footerNote: 'Reportado via App Mobile',
-    footerType: 'muted',
-    actionLabel: 'Resolver Pendência',
-    actionVariant: 'orange',
-    images: [
-      'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=800&q=80',
-      'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80',
-    ],
-  },
-  {
-    id: '2',
-    ticket: '#49198',
-    title: 'Condomínio Mirante - Casa 12',
-    address: 'Rua das Acácias, 310 - Jardins',
-    teamShort: 'Equipe Beta',
-    teamFull: 'Equipe Beta (João/Paulo)',
-    teamAvatar:
-      'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=100&q=80',
-    status: 'resolucao',
-    badgeLabel: 'EM RESOLUÇÃO',
-    timestamp: '14 OUT, 14:15',
-    reportedAtFull: '14/10/2023 às 14:15',
-    shortDescription:
-      'Puxador da janela oscilo-batente apresenta arranhão superficial e folga no acionamento mecânico. Necessária substituição da peça.',
-    fullDescription:
-      'Durante a conferência de ferragens na suíte master, foi constatado risco no acabamento anodizado do puxador e leve folga no cremona. Equipe técnica já está em deslocamento com o kit de reposição original.',
-    footerNote: 'Equipe a caminho',
-    footerType: 'muted',
-    actionLabel: 'Ver Detalhes',
-    actionVariant: 'outline',
-    images: [
-      'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=800&q=80',
-    ],
-  },
-  {
-    id: '3',
-    ticket: '#49185',
-    title: 'Edifício Solar - Cob. 01',
-    address: 'Av. Beira Mar, 890 - Centro',
-    teamShort: 'Equipe Gama',
-    teamFull: 'Equipe Gama (Lucas/Pedro)',
-    teamAvatar:
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&q=80',
-    status: 'aberto',
-    badgeLabel: 'ABERTO',
-    timestamp: '14 OUT, 10:20',
-    reportedAtFull: '14/10/2023 às 10:20',
-    shortDescription:
-      'Ajuste de regulagem nas roldanas da folha central do fechamento de sacada para suavizar o deslizamento.',
-    fullDescription:
-      'Cliente relatou leve atrito ao deslizar a folha 03 do sistema envidraçado da varanda gourmet. Agendada visita preventiva para alinhamento das roldanas e lubrificação dos trilhos.',
-    footerNote: 'Aguardando visita',
-    footerType: 'muted',
-    actionLabel: 'Ver Detalhes',
-    actionVariant: 'outline',
-    images: [
-      'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=800&q=80',
-    ],
-  },
-  {
-    id: '4',
-    ticket: '#49164',
-    title: 'Torre Norte - Sala 1201',
-    address: 'Alameda Santos, 2100 - Conj. 1201',
-    teamShort: 'Equipe Alfa',
-    teamFull: 'Equipe Alfa (Marcos/Sandro)',
-    teamAvatar:
-      'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=100&q=80',
-    status: 'resolvido',
-    badgeLabel: 'RESOLVIDO',
-    timestamp: '13 OUT, 16:45',
-    reportedAtFull: '13/10/2023 às 16:45',
-    shortDescription:
-      'Vedações trocadas e testadas com jato de água. Nenhuma infiltração detectada. Cliente aprovou o serviço.',
-    fullDescription:
-      'Substituição completa das borrachas EPDM perimetrais e reaplicação de silicone estrutural neutro na fachada pele de vidro. Teste de estanqueidade aprovado com assinatura do engenheiro responsável.',
-    footerNote: 'Finalizado em 14/10',
-    footerType: 'resolved',
-    actionLabel: 'Ver Histórico',
-    actionVariant: 'link',
-    images: [
-      'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=800&q=80',
-    ],
-  },
-])
+const filterTabs: FilterTab[] = ['Todos', 'Crítico', 'Aberto', 'Finalizado']
+
+const occurrences = ref<Occurrence[]>([])
+const projetosDisponiveis = ref<ProjetoOption[]>([])
+const equipesDisponiveis = ref<string[]>([])
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function gerarIniciais(nome: string): string {
+  return (
+    nome
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w.charAt(0).toUpperCase())
+      .join('') || 'EQ'
+  )
+}
+
+function formatarCurto(iso?: string): string {
+  if (!iso) return 'RECENTE'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'RECENTE'
+  return d
+    .toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    .replace('.', '')
+    .toUpperCase()
+}
+
+function formatarCompleto(iso?: string): string {
+  if (!iso) return 'Data não informada'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'Data não informada'
+  return `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`
+}
+
+async function carregarOcorrencias() {
+  carregando.value = true
+  try {
+    const headers = getAuthHeaders()
+    const [resOcc, resProj, resOrc, resEq, resUser] = await Promise.all([
+      fetch(`${API_URL}/ocorrencia`, { headers }),
+      fetch(`${API_URL}/projeto`, { headers }),
+      fetch(`${API_URL}/orcamento`, { headers }),
+      fetch(`${API_URL}/equipe`, { headers }),
+      fetch(`${API_URL}/user`, { headers }),
+    ])
+
+    const listaOcc = resOcc.ok ? await resOcc.json() : []
+    const listaProj = resProj.ok ? await resProj.json() : []
+    const listaOrc = resOrc.ok ? await resOrc.json() : []
+    const listaEq = resEq.ok ? await resEq.json() : []
+    const listaUser = resUser.ok ? await resUser.json() : []
+
+    const mapaOrc = new Map<number, any>()
+    for (const o of listaOrc) mapaOrc.set(o.id, o)
+
+    const mapaProj = new Map<number, any>()
+    for (const p of listaProj) mapaProj.set(p.id, p)
+
+    const mapaUser = new Map<number, string>()
+    for (const u of listaUser) mapaUser.set(u.id, u.nome)
+
+    // Preenche opções de projetos para o modal de abertura
+    projetosDisponiveis.value = listaProj.map((p: any) => {
+      const orc = mapaOrc.get(p.orcamentoId)
+      return {
+        id: p.id,
+        label: `#${p.id} - ${orc?.nomeCliente || `Orçamento #${p.orcamentoId}`}`,
+      }
+    })
+    if (projetosDisponiveis.value.length > 0 && novoProjetoId.value === 0) {
+      novoProjetoId.value = projetosDisponiveis.value[0]!.id
+    }
+
+    const nomesEquipesSet = new Set<string>()
+    for (const eq of listaEq) {
+      if (eq.nome) nomesEquipesSet.add(eq.nome)
+    }
+
+    occurrences.value = listaOcc.map((o: any) => {
+      const proj = mapaProj.get(o.projetoId)
+      const orc = mapaOrc.get(o.orcamentoId || proj?.orcamentoId)
+
+      // Descobre equipe pelo tecnicoId do projeto ou pelo nome de quem reportou
+      const equipeVinculada = proj?.tecnicoId
+        ? listaEq.find((e: any) => (e.membros || []).some((m: any) => m.usuarioId === proj.tecnicoId))
+        : null
+
+      const teamShort = equipeVinculada?.nome || (proj?.tecnicoId ? mapaUser.get(proj.tecnicoId) : null) || 'Equipe Campo'
+      nomesEquipesSet.add(teamShort)
+
+      const membrosNomes = equipeVinculada?.membros?.map((m: any) => m.nome).join('/')
+      const teamFull = membrosNomes ? `${teamShort} (${membrosNomes})` : `${teamShort} • Por ${o.reportadoPorNome || 'Técnico'}`
+
+      const sev = (o.severidade || 'MEDIA').toUpperCase()
+      const isCritico = !o.resolvida && (o.bloqueiaObra || sev === 'CRITICA' || sev === 'ALTA')
+
+      let status: OccurrenceStatus = 'aberto'
+      let badgeLabel = `ABERTO • ${o.tipo || 'TÉCNICA'}`
+      let actionLabel = 'Resolver Pendência'
+      let actionVariant: 'orange' | 'outline' | 'link' = 'outline'
+
+      if (o.resolvida) {
+        status = 'resolvido'
+        badgeLabel = 'RESOLVIDO'
+        actionLabel = 'Ver Histórico'
+        actionVariant = 'link'
+      } else if (isCritico) {
+        status = 'critico'
+        badgeLabel = o.bloqueiaObra ? 'EMBARGO / CRÍTICO' : 'ABERTO - CRÍTICO'
+        actionLabel = 'Resolver Pendência'
+        actionVariant = 'orange'
+      }
+
+      return {
+        id: o.id,
+        projetoId: o.projetoId,
+        ticket: `#${String(o.id).padStart(5, '0')}`,
+        title: `${orc?.nomeCliente || `Projeto #${o.projetoId}`} - ${o.titulo}`,
+        address: orc?.enderecoObra || 'Endereço da obra não cadastrado',
+        teamShort,
+        teamFull,
+        teamInitials: gerarIniciais(teamShort),
+        status,
+        badgeLabel,
+        timestamp: formatarCurto(o.dataAbertura),
+        reportedAtFull: formatarCompleto(o.dataAbertura),
+        shortDescription: o.descricao,
+        fullDescription: o.descricao,
+        solucaoAplicada: o.solucaoAplicada || '',
+        bloqueiaObra: Boolean(o.bloqueiaObra),
+        resolvida: Boolean(o.resolvida),
+        footerNote: o.resolvida
+          ? `Finalizado ${o.dataResolucao ? `em ${new Date(o.dataResolucao).toLocaleDateString('pt-BR')}` : ''}`
+          : `Reportado por ${o.reportadoPorNome || 'Equipe'}`,
+        footerType: o.resolvida ? 'resolved' : 'muted',
+        actionLabel,
+        actionVariant,
+        images: o.fotoUrl ? [o.fotoUrl] : [FALLBACK_IMG],
+      }
+    })
+
+    equipesDisponiveis.value = Array.from(nomesEquipesSet)
+
+    if (occurrences.value.length > 0) {
+      const atual = occurrences.value.find((x) => x.id === selectedOccurrenceId.value) ?? occurrences.value[0]!
+      selectedOccurrenceId.value = atual.id
+      solucaoInput.value = atual.solucaoAplicada
+    }
+  } catch (err) {
+    console.error('Erro ao carregar ocorrências:', err)
+  } finally {
+    carregando.value = false
+  }
+}
+
+const totalPendenciasKpi = computed(() => occurrences.value.length)
+const emAbertoKpi = computed(() => occurrences.value.filter((o) => !o.resolvida).length)
+const criticasKpi = computed(() => occurrences.value.filter((o) => o.status === 'critico').length)
 
 const filteredOccurrences = computed<Occurrence[]>(() => {
   return occurrences.value.filter((item) => {
     let matchesTab = true
     if (activeTab.value === 'Crítico') matchesTab = item.status === 'critico'
-    else if (activeTab.value === 'Aberto')
-      matchesTab = item.status === 'aberto' || item.status === 'critico'
-    else if (activeTab.value === 'Em Curso') matchesTab = item.status === 'resolucao'
-    else if (activeTab.value === 'Finalizado') matchesTab = item.status === 'resolvido'
+    else if (activeTab.value === 'Aberto') matchesTab = !item.resolvida
+    else if (activeTab.value === 'Finalizado') matchesTab = item.resolvida
 
     const matchesTeam =
       selectedTeam.value === 'Todas Equipes' || item.teamShort === selectedTeam.value
@@ -166,7 +267,8 @@ const filteredOccurrences = computed<Occurrence[]>(() => {
   })
 })
 
-const selectedOccurrence = computed<Occurrence>(() => {
+const selectedOccurrence = computed<Occurrence | null>(() => {
+  if (occurrences.value.length === 0) return null
   return (
     occurrences.value.find((o) => o.id === selectedOccurrenceId.value) ??
     occurrences.value[0]!
@@ -174,17 +276,19 @@ const selectedOccurrence = computed<Occurrence>(() => {
 })
 
 const activePreviewImage = computed<string>(() => {
+  if (!selectedOccurrence.value) return FALLBACK_IMG
   return (
     selectedOccurrence.value.images[selectedPhotoIndex.value] ??
     selectedOccurrence.value.images[0] ??
-    ''
+    FALLBACK_IMG
   )
 })
 
 function abrirDetalhes(item: Occurrence) {
   selectedOccurrenceId.value = item.id
   selectedPhotoIndex.value = 0
-  saveFeedback.value = false
+  solucaoInput.value = item.solucaoAplicada
+  saveFeedback.value = null
   isDrawerOpen.value = true
 }
 
@@ -195,20 +299,95 @@ function abrirSeletorFoto() {
 function adicionarFoto(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
-  if (!file) return
+  if (!file || !selectedOccurrence.value) return
 
-  const objectUrl = URL.createObjectURL(file)
-  selectedOccurrence.value.images.push(objectUrl)
-  selectedPhotoIndex.value = selectedOccurrence.value.images.length - 1
+  const reader = new FileReader()
+  reader.onload = () => {
+    if (typeof reader.result === 'string' && selectedOccurrence.value) {
+      selectedOccurrence.value.images.push(reader.result)
+      selectedPhotoIndex.value = selectedOccurrence.value.images.length - 1
+    }
+  }
+  reader.readAsDataURL(file)
   target.value = ''
 }
 
-function salvarAlteracoes() {
-  saveFeedback.value = true
-  setTimeout(() => {
-    saveFeedback.value = false
-  }, 2500)
+async function resolverOcorrenciaAtual() {
+  if (!selectedOccurrence.value || resolvendo.value) return
+  resolvendo.value = true
+
+  try {
+    const res = await fetch(`${API_URL}/ocorrencia/${selectedOccurrence.value.id}/resolver`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        solucaoAplicada: solucaoInput.value.trim() || 'Pendência resolvida pela gestão.',
+      }),
+    })
+
+    if (!res.ok) throw new Error('Erro ao resolver ocorrência')
+
+    await carregarOcorrencias()
+    saveFeedback.value = `Ocorrência ${selectedOccurrence.value.ticket} marcada como resolvida!`
+    setTimeout(() => {
+      saveFeedback.value = null
+    }, 3000)
+  } catch (err) {
+    console.error(err)
+    saveFeedback.value = 'Erro ao atualizar ocorrência na API.'
+  } finally {
+    resolvendo.value = false
+  }
 }
+
+async function criarNovaOcorrencia() {
+  if (!novoProjetoId.value || !novoTitulo.value.trim() || !novaDescricao.value.trim() || criandoOcorrencia.value) {
+    return
+  }
+
+  criandoOcorrencia.value = true
+  try {
+    const res = await fetch(`${API_URL}/ocorrencia/cadastrar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        projetoId: novoProjetoId.value,
+        reportadoPorId: usuarioLogado?.id || 1,
+        titulo: novoTitulo.value.trim(),
+        tipo: novoTipo.value,
+        severidade: novaSeveridade.value,
+        descricao: novaDescricao.value.trim(),
+        fotoUrl: novaFotoUrl.value.trim() || null,
+        bloqueiaObra: novoBloqueiaObra.value,
+      }),
+    })
+
+    if (!res.ok) throw new Error('Falha ao cadastrar ocorrência')
+
+    novoTitulo.value = ''
+    novaDescricao.value = ''
+    novaFotoUrl.value = ''
+    novoBloqueiaObra.value = false
+    showCreateModal.value = false
+
+    await carregarOcorrencias()
+  } catch (err) {
+    console.error(err)
+    alert('Não foi possível registrar a ocorrência na API.')
+  } finally {
+    criandoOcorrencia.value = false
+  }
+}
+
+onMounted(() => {
+  carregarOcorrencias()
+})
 </script>
 
 <template>
@@ -234,31 +413,35 @@ function salvarAlteracoes() {
           </div>
 
           <div class="topbar-actions">
-            <button type="button" class="icon-btn" aria-label="Notificações">
+            <button
+              type="button"
+              class="btn-new-occ"
+              @click="showCreateModal = true"
+            >
+              + Nova Ocorrência
+            </button>
+
+            <button
+              type="button"
+              class="icon-btn"
+              aria-label="Notificações"
+              title="Atualizar ocorrências"
+              @click="carregarOcorrencias"
+            >
               <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
-              <span class="notif-dot"></span>
-            </button>
-
-            <button type="button" class="icon-btn" aria-label="Calendário">
-              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
+              <span v-if="emAbertoKpi > 0" class="notif-dot"></span>
             </button>
 
             <div class="divider"></div>
 
             <div class="user-profile">
               <div class="user-info">
-                <p class="user-name">Ricardo Almeida</p>
-                <p class="user-role">Gestor de Produção</p>
+                <p class="user-name">{{ nomeUsuario }}</p>
+                <p class="user-role">{{ cargoUsuario }}</p>
               </div>
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
-                alt="Ricardo Almeida"
-                class="user-avatar"
-              />
+              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
             </div>
           </div>
         </header>
@@ -270,15 +453,15 @@ function salvarAlteracoes() {
             <div class="kpi-card">
               <p class="kpi-label">Total Pendências</p>
               <div class="kpi-bottom">
-                <strong class="kpi-value">124</strong>
-                <span class="kpi-pill blue">+12% mês</span>
+                <strong class="kpi-value">{{ totalPendenciasKpi }}</strong>
+                <span class="kpi-pill blue">Registros</span>
               </div>
             </div>
 
             <div class="kpi-card border-red">
               <p class="kpi-label">Em Aberto</p>
               <div class="kpi-bottom">
-                <strong class="kpi-value text-red">32</strong>
+                <strong class="kpi-value text-red">{{ emAbertoKpi }}</strong>
                 <svg class="kpi-watermark-icon" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -286,11 +469,11 @@ function salvarAlteracoes() {
             </div>
 
             <div class="kpi-card border-amber">
-              <p class="kpi-label">Em Resolução</p>
+              <p class="kpi-label">Críticas / Embargos</p>
               <div class="kpi-bottom">
-                <strong class="kpi-value text-amber">45</strong>
+                <strong class="kpi-value text-amber">{{ criticasKpi }}</strong>
                 <svg class="kpi-watermark-icon" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                 </svg>
               </div>
             </div>
@@ -315,27 +498,13 @@ function salvarAlteracoes() {
             <div class="dropdown-group">
               <div class="filter-select">
                 <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                <select v-model="selectedPeriod" aria-label="Período">
-                  <option value="Últimos 30 dias">Últimos 30 dias</option>
-                  <option value="Últimos 7 dias">Últimos 7 dias</option>
-                  <option value="Este mês">Este mês</option>
-                </select>
-                <svg class="chevron" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-
-              <div class="filter-select">
-                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
                 <select v-model="selectedTeam" aria-label="Equipes">
                   <option value="Todas Equipes">Todas Equipes</option>
-                  <option value="Equipe Alfa">Equipe Alfa</option>
-                  <option value="Equipe Beta">Equipe Beta</option>
-                  <option value="Equipe Gama">Equipe Gama</option>
+                  <option v-for="eq in equipesDisponiveis" :key="eq" :value="eq">
+                    {{ eq }}
+                  </option>
                 </select>
                 <svg class="chevron" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
@@ -345,14 +514,18 @@ function salvarAlteracoes() {
           </section>
 
           <!-- Grade de Ocorrências -->
-          <section :class="['cards-grid', { 'drawer-open': isDrawerOpen }]">
+          <section :class="['cards-grid', { 'drawer-open': isDrawerOpen && selectedOccurrence }]">
+            <div v-if="carregando" class="empty-state">
+              Carregando ocorrências da API...
+            </div>
+
             <article
+              v-else
               v-for="item in filteredOccurrences"
               :key="item.id"
-              :class="['occ-card', { selected: isDrawerOpen && selectedOccurrence.id === item.id }]"
+              :class="['occ-card', { selected: isDrawerOpen && selectedOccurrence?.id === item.id }]"
               @click="abrirDetalhes(item)"
             >
-              <!-- Cabeçalho do Card -->
               <div class="occ-header">
                 <div class="occ-top-row">
                   <span :class="['status-badge', `badge-${item.status}`]">
@@ -370,13 +543,11 @@ function salvarAlteracoes() {
                 </p>
               </div>
 
-              <!-- Corpo com Foto + Descrição -->
               <div class="occ-body">
                 <img :src="item.images[0]" :alt="item.title" class="occ-thumb" />
                 <p class="occ-desc">{{ item.shortDescription }}</p>
               </div>
 
-              <!-- Rodapé do Card -->
               <div class="occ-footer">
                 <span v-if="item.footerType === 'resolved'" class="footer-resolved">
                   <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20">
@@ -396,7 +567,7 @@ function salvarAlteracoes() {
               </div>
             </article>
 
-            <div v-if="filteredOccurrences.length === 0" class="empty-state">
+            <div v-if="!carregando && filteredOccurrences.length === 0" class="empty-state">
               Nenhuma ocorrência encontrada para os filtros selecionados.
             </div>
           </section>
@@ -404,7 +575,7 @@ function salvarAlteracoes() {
       </main>
 
       <!-- Painel Lateral Direito: Detalhes da Ocorrência -->
-      <aside v-if="isDrawerOpen" class="details-drawer">
+      <aside v-if="isDrawerOpen && selectedOccurrence" class="details-drawer">
         <div class="drawer-header">
           <h2>Detalhes da Ocorrência</h2>
           <button
@@ -418,7 +589,6 @@ function salvarAlteracoes() {
         </div>
 
         <div class="drawer-scroll">
-          <!-- Ticket & Título -->
           <div class="drawer-ticket-row">
             <span :class="['status-badge', `badge-${selectedOccurrence.status}`]">
               {{ selectedOccurrence.badgeLabel }}
@@ -480,11 +650,7 @@ function salvarAlteracoes() {
             <div>
               <label class="micro-label">EQUIPE RESPONSÁVEL</label>
               <div class="team-badge-row">
-                <img
-                  :src="selectedOccurrence.teamAvatar"
-                  :alt="selectedOccurrence.teamShort"
-                  class="team-mini-avatar"
-                />
+                <span class="team-mini-initials">{{ selectedOccurrence.teamInitials }}</span>
                 <strong>{{ selectedOccurrence.teamShort }}</strong>
               </div>
             </div>
@@ -495,21 +661,121 @@ function salvarAlteracoes() {
             </div>
           </div>
 
-          <!-- Ações Rápidas -->
+          <!-- Parecer / Solução Aplicada -->
           <div class="drawer-section">
-            <label class="micro-label">AÇÕES RÁPIDAS</label>
+            <label class="micro-label">PARECER / SOLUÇÃO APLICADA</label>
+            <textarea
+              v-model="solucaoInput"
+              rows="3"
+              class="solution-textarea"
+              :disabled="selectedOccurrence.resolvida"
+              placeholder="Descreva a ação corretiva realizada pela equipe..."
+            ></textarea>
+
             <p v-if="saveFeedback" class="save-feedback">
-              Alterações salvas com sucesso para {{ selectedOccurrence.ticket }}.
+              {{ saveFeedback }}
             </p>
           </div>
         </div>
 
-        <div class="drawer-footer">
-          <button type="button" class="btn-save-primary" @click="salvarAlteracoes">
-            Salvar Alterações
+        <div v-if="!selectedOccurrence.resolvida" class="drawer-footer">
+          <button
+            type="button"
+            class="btn-save-primary"
+            :disabled="resolvendo"
+            @click="resolverOcorrenciaAtual"
+          >
+            {{ resolvendo ? 'Finalizando...' : 'Marcar como Resolvida' }}
           </button>
         </div>
       </aside>
+    </div>
+
+    <!-- Modal: Registrar Nova Ocorrência -->
+    <div
+      v-if="showCreateModal"
+      class="modal-backdrop"
+      @click.self="showCreateModal = false"
+    >
+      <div class="modal-box">
+        <div class="modal-header">
+          <div>
+            <h3>Registrar Nova Ocorrência</h3>
+            <p class="modal-sub">Notifique a gestão sobre pendências ou bloqueios na obra</p>
+          </div>
+          <button type="button" @click="showCreateModal = false">&times;</button>
+        </div>
+
+        <form class="modal-form" @submit.prevent="criarNovaOcorrencia">
+          <label class="field-label">Projeto / Obra *</label>
+          <select v-model.number="novoProjetoId" class="modal-input" required>
+            <option v-for="p in projetosDisponiveis" :key="p.id" :value="p.id">
+              {{ p.label }}
+            </option>
+          </select>
+
+          <label class="field-label">Título da Ocorrência *</label>
+          <input
+            v-model="novoTitulo"
+            type="text"
+            class="modal-input"
+            placeholder="Ex: Vidro temperado trincado no transporte"
+            required
+          />
+
+          <div class="modal-row-2">
+            <div>
+              <label class="field-label">Tipo</label>
+              <select v-model="novoTipo" class="modal-input">
+                <option value="TECNICA">Técnica / Instalação</option>
+                <option value="MATERIAL">Material / Vidro</option>
+                <option value="EMBARGO">Embargo de Obra</option>
+                <option value="CLIENTE">Solicitação Cliente</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Severidade</label>
+              <select v-model="novaSeveridade" class="modal-input">
+                <option value="BAIXA">Baixa</option>
+                <option value="MEDIA">Média</option>
+                <option value="ALTA">Alta</option>
+                <option value="CRITICA">Crítica</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="field-label">Descrição Detalhada *</label>
+          <textarea
+            v-model="novaDescricao"
+            rows="3"
+            class="modal-input"
+            placeholder="Descreva o problema identificado no local..."
+            required
+          ></textarea>
+
+          <label class="field-label">URL da Foto (opcional)</label>
+          <input
+            v-model="novaFotoUrl"
+            type="text"
+            class="modal-input"
+            placeholder="https://..."
+          />
+
+          <label class="checkbox-block">
+            <input v-model="novoBloqueiaObra" type="checkbox" />
+            <span>Esta ocorrência bloqueia/embarga a continuação da obra</span>
+          </label>
+
+          <div class="modal-footer">
+            <button type="button" class="btn-outline" @click="showCreateModal = false">
+              Cancelar
+            </button>
+            <button type="submit" class="btn-new-occ" :disabled="criandoOcorrencia">
+              {{ criandoOcorrencia ? 'Salvando...' : 'Registrar Ocorrência' }}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 </template>
@@ -538,6 +804,7 @@ function salvarAlteracoes() {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 
 /* Topbar */
@@ -594,13 +861,27 @@ function salvarAlteracoes() {
   box-shadow: 0 0 0 3px #EFF6FF;
 }
 
-/* Ações do topo (notificações, calendário, usuário) */
 .topbar-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 14px;
   flex-shrink: 0;
+}
+
+.btn-new-occ {
+  background: #1E3A8A;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-new-occ:hover {
+  background: #1E40AF;
 }
 
 .icon-btn {
@@ -660,21 +941,25 @@ function salvarAlteracoes() {
   color: #64748B;
 }
 
-.user-avatar {
+.user-avatar-initials {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  object-fit: cover;
-  border: 1px solid #E2E8F0;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Corpo Principal */
 .content-body {
-  padding: 24px 28px 36px;
+  padding: 24px 28px 64px;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  overflow-x: hidden;
 }
 
 /* KPIs */
@@ -771,10 +1056,6 @@ function salvarAlteracoes() {
   transition: 0.15s;
 }
 
-.seg-btn:hover {
-  color: #1E293B;
-}
-
 .seg-btn.active {
   background: #F1F5F9;
   color: #1E293B;
@@ -825,15 +1106,15 @@ function salvarAlteracoes() {
   pointer-events: none;
 }
 
-/* Grade de Cards de Ocorrências */
+/* Grade de Cards */
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(290px, 1fr));
+  grid-template-columns: repeat(3, minmax(280px, 1fr));
   gap: 18px;
 }
 
 .cards-grid.drawer-open {
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
 }
 
 .occ-card {
@@ -845,12 +1126,10 @@ function salvarAlteracoes() {
   justify-content: space-between;
   cursor: pointer;
   transition: 0.16s ease;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
 .occ-card:hover {
   border-color: #93C5FD;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
 }
 
 .occ-card.selected {
@@ -881,13 +1160,12 @@ function salvarAlteracoes() {
   text-transform: uppercase;
 }
 
-.badge-critico,
-.badge-aberto {
+.badge-critico {
   background: #FEE2E2;
   color: #EF4444;
 }
 
-.badge-resolucao {
+.badge-aberto {
   background: #FEF3C7;
   color: #D97706;
 }
@@ -972,7 +1250,6 @@ function salvarAlteracoes() {
   border-radius: 8px;
   padding: 7px 13px;
   cursor: pointer;
-  transition: 0.15s;
 }
 
 .btn-orange {
@@ -981,18 +1258,10 @@ function salvarAlteracoes() {
   border: none;
 }
 
-.btn-orange:hover {
-  background: #C2410C;
-}
-
 .btn-outline {
   background: #FFFFFF;
   color: #1E293B;
   border: 1px solid #CBD5E1;
-}
-
-.btn-outline:hover {
-  background: #F8FAFC;
 }
 
 .btn-link {
@@ -1000,10 +1269,6 @@ function salvarAlteracoes() {
   color: #334155;
   border: none;
   padding: 6px 4px;
-}
-
-.btn-link:hover {
-  color: #1E3A8A;
 }
 
 .empty-state {
@@ -1028,7 +1293,6 @@ function salvarAlteracoes() {
   height: 100vh;
   position: sticky;
   top: 0;
-  box-shadow: -4px 0 20px rgba(15, 23, 42, 0.04);
   z-index: 25;
 }
 
@@ -1044,23 +1308,14 @@ function salvarAlteracoes() {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
-  color: #1E293B;
 }
 
 .close-drawer-btn {
   background: transparent;
   border: none;
   font-size: 20px;
-  line-height: 1;
   color: #64748B;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.close-drawer-btn:hover {
-  background: #F1F5F9;
-  color: #1E293B;
 }
 
 .drawer-scroll {
@@ -1084,9 +1339,8 @@ function salvarAlteracoes() {
 
 .drawer-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 800;
-  color: #1E293B;
 }
 
 .drawer-address {
@@ -1111,7 +1365,7 @@ function salvarAlteracoes() {
 
 .hero-photo-box {
   width: 100%;
-  height: 185px;
+  height: 175px;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid #E2E8F0;
@@ -1132,14 +1386,13 @@ function salvarAlteracoes() {
 }
 
 .thumb-btn {
-  width: 54px;
-  height: 54px;
+  width: 52px;
+  height: 52px;
   padding: 0;
   border-radius: 10px;
   overflow: hidden;
   border: 2px solid transparent;
   cursor: pointer;
-  background: #F1F5F9;
 }
 
 .thumb-btn.active {
@@ -1157,24 +1410,14 @@ function salvarAlteracoes() {
 }
 
 .add-photo-btn {
-  width: 54px;
-  height: 54px;
+  width: 52px;
+  height: 52px;
   border-radius: 10px;
   border: 1px solid #E2E8F0;
   background: #F8FAFC;
   color: #64748B;
   font-size: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: pointer;
-  transition: 0.15s;
-}
-
-.add-photo-btn:hover {
-  background: #EFF6FF;
-  color: #1E3A8A;
-  border-color: #93C5FD;
 }
 
 .description-box {
@@ -1203,25 +1446,45 @@ function salvarAlteracoes() {
   align-items: center;
   gap: 8px;
   font-size: 12.5px;
-  color: #1E293B;
 }
 
-.team-mini-avatar {
-  width: 22px;
-  height: 22px;
+.team-mini-initials {
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  object-fit: cover;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .reported-date {
   margin: 2px 0 0;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 700;
-  color: #1E293B;
+}
+
+.solution-textarea {
+  width: 100%;
+  border: 1px solid #CBD5E1;
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  resize: vertical;
+}
+
+.solution-textarea:disabled {
+  background: #F8FAFC;
+  color: #475569;
 }
 
 .save-feedback {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   font-size: 12px;
   font-weight: 600;
   color: #10B981;
@@ -1230,7 +1493,6 @@ function salvarAlteracoes() {
 .drawer-footer {
   padding: 16px 22px;
   border-top: 1px solid #F1F5F9;
-  background: #FFFFFF;
 }
 
 .btn-save-primary {
@@ -1243,15 +1505,104 @@ function salvarAlteracoes() {
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(30, 58, 138, 0.2);
-  transition: 0.15s;
 }
 
-.btn-save-primary:hover {
-  background: #1E40AF;
+.btn-save-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-/* Responsividade */
+/* Modal Nova Ocorrência */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.modal-box {
+  background: #FFFFFF;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 480px;
+  padding: 24px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-sub {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: #64748B;
+}
+
+.modal-header button {
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #94A3B8;
+  cursor: pointer;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.modal-input {
+  width: 100%;
+  border: 1px solid #CBD5E1;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+
+.modal-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.checkbox-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #EF4444;
+  margin-top: 4px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 @media (max-width: 1280px) {
   .cards-grid,
   .cards-grid.drawer-open {
