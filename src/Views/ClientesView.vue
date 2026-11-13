@@ -1,23 +1,39 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
+import { getToken, getUsuario } from '../utils/auth'
 
-type TabCategory = 'Todos' | 'PF' | 'PJ' | 'Arquivados'
-type ClientGroup = 'PF' | 'PJ'
+type TabCategory = 'Todos' | 'Ativos' | 'Em Produção' | 'Arquivados'
 type StatusKey = 'ativo' | 'producao' | 'medicao' | 'fidelizado'
 
 interface Client {
   id: number
+  orcamentoId?: number
   initials: string
   name: string
   email: string
-  typeLabel: string
-  group: ClientGroup
+  telefone: string
+  endereco: string
   statusKey: StatusKey
   statusLabel: string
   lastContact: string
   archived?: boolean
 }
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+const usuarioLogado = getUsuario()
+const nomeUsuario = computed(() => usuarioLogado?.nome || 'Gestor')
+const cargoUsuario = computed(() =>
+  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Operador'
+)
+const iniciaisUsuario = computed(() =>
+  nomeUsuario.value
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase())
+    .join('')
+)
 
 function aoNavegar(menu: string) {
   console.log('Menu selecionado:', menu)
@@ -26,79 +42,160 @@ function aoNavegar(menu: string) {
 const searchQuery = ref<string>('')
 const activeTab = ref<TabCategory>('Todos')
 const currentPage = ref<number>(1)
+const porPagina = 10
 const showModal = ref<boolean>(false)
-const totalClientes = ref<number>(1284)
+const carregando = ref<boolean>(false)
+const salvando = ref<boolean>(false)
 
 const newClient = ref<{
   name: string
   email: string
-  typeLabel: string
+  telefone: string
+  endereco: string
 }>({
   name: '',
   email: '',
-  typeLabel: 'Pessoa Física',
+  telefone: '',
+  endereco: '',
 })
 
-const tabs: TabCategory[] = ['Todos', 'PF', 'PJ', 'Arquivados']
+const tabs: TabCategory[] = ['Todos', 'Ativos', 'Em Produção', 'Arquivados']
+const clients = ref<Client[]>([])
 
-const clients = ref<Client[]>([
-  {
-    id: 1,
-    initials: 'ML',
-    name: 'Marina Lins',
-    email: 'marina.lins@email.com',
-    typeLabel: 'Pessoa Física',
-    group: 'PF',
-    statusKey: 'ativo',
-    statusLabel: 'ATIVO',
-    lastContact: 'Hoje, 14:30',
-  },
-  {
-    id: 2,
-    initials: 'CO',
-    name: 'Construtora Omega',
-    email: 'contato@omega.com.br',
-    typeLabel: 'Pessoa Jurídica',
-    group: 'PJ',
-    statusKey: 'producao',
-    statusLabel: 'EM PRODUÇÃO',
-    lastContact: 'Ontem, 09:15',
-  },
-  {
-    id: 3,
-    initials: 'JA',
-    name: 'Joaquim Azevedo',
-    email: 'joaquim.aze@gmail.com',
-    typeLabel: 'Pessoa Física',
-    group: 'PF',
-    statusKey: 'medicao',
-    statusLabel: 'MEDIÇÃO',
-    lastContact: '12 Out 2023',
-  },
-  {
-    id: 4,
-    initials: 'RF',
-    name: 'Residencial Florada',
-    email: 'admin@residencialflorada.com',
-    typeLabel: 'Condomínio (PJ)',
-    group: 'PJ',
-    statusKey: 'fidelizado',
-    statusLabel: 'FIDELIZADO',
-    lastContact: '10 Out 2023',
-  },
-])
+function gerarIniciais(nome: string): string {
+  return (
+    nome
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((word) => word.charAt(0).toUpperCase())
+      .join('') || 'CL'
+  )
+}
 
-const formattedTotalClientes = computed<string>(() => {
-  return totalClientes.value.toLocaleString('en-US')
+function formatarUltimoContato(iso?: string): string {
+  if (!iso) return 'Recente'
+  const data = new Date(iso)
+  if (Number.isNaN(data.getTime())) return 'Recente'
+  return data.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+async function carregarClientes() {
+  carregando.value = true
+  try {
+    const headers = { Authorization: `Bearer ${getToken()}` }
+
+    const [resOrc, resProj] = await Promise.all([
+      fetch(`${API_URL}/orcamento`, { headers }),
+      fetch(`${API_URL}/projeto`, { headers }),
+    ])
+
+    const listaOrcamentos = resOrc.ok ? await resOrc.json() : []
+    const listaProjetos = resProj.ok ? await resProj.json() : []
+
+    const mapaProjetoPorOrc = new Map<number, any>()
+    for (const p of listaProjetos) {
+      mapaProjetoPorOrc.set(p.orcamentoId, p)
+    }
+
+    const mapaClientes = new Map<string, Client>()
+
+    for (const orc of listaOrcamentos) {
+      const nome = (orc.nomeCliente || '').trim()
+      if (!nome) continue
+
+      const chave = `${nome.toLowerCase()}|${(orc.emailCliente || '').toLowerCase()}`
+      const proj = mapaProjetoPorOrc.get(orc.id)
+
+      let statusKey: StatusKey = 'ativo'
+      let statusLabel = 'ATIVO'
+
+      if (proj) {
+        const sp = (proj.statusProducao || '').toUpperCase()
+        if (sp === 'CONCLUIDO') {
+          statusKey = 'fidelizado'
+          statusLabel = 'FIDELIZADO'
+        } else if (sp === 'AGUARDANDO_MEDICAO') {
+          statusKey = 'medicao'
+          statusLabel = 'MEDIÇÃO'
+        } else {
+          statusKey = 'producao'
+          statusLabel = 'EM PRODUÇÃO'
+        }
+      } else if ((orc.status || '').toUpperCase() === 'RASCUNHO') {
+        statusKey = 'medicao'
+        statusLabel = 'PROSPECTO'
+      }
+
+      const existente = mapaClientes.get(chave)
+      if (!existente) {
+        mapaClientes.set(chave, {
+          id: orc.id,
+          orcamentoId: orc.id,
+          initials: gerarIniciais(nome),
+          name: nome,
+          email: orc.emailCliente || 'sem-email@cliente.com',
+          telefone: orc.telefoneCliente || 'Não informado',
+          endereco: orc.enderecoObra || 'Endereço não informado',
+          statusKey,
+          statusLabel,
+          lastContact: formatarUltimoContato(orc.dataCriacao),
+          archived: (orc.status || '').toUpperCase() === 'CANCELADO',
+        })
+      } else if (statusKey === 'fidelizado' || statusKey === 'producao') {
+        existente.statusKey = statusKey
+        existente.statusLabel = statusLabel
+      }
+    }
+
+    clients.value = Array.from(mapaClientes.values()).sort((a, b) => b.id - a.id)
+  } catch (err) {
+    console.error('Erro ao carregar clientes da API:', err)
+  } finally {
+    carregando.value = false
+  }
+}
+
+/* ---------- KPIs Dinâmicos ---------- */
+const totalClientes = computed<number>(() => clients.value.filter((c) => !c.archived).length)
+const formattedTotalClientes = computed<string>(() =>
+  totalClientes.value.toLocaleString('pt-BR')
+)
+
+const totalProspectos = computed<number>(
+  () => clients.value.filter((c) => !c.archived && c.statusKey === 'medicao').length
+)
+
+const totalAguardando = computed<number>(
+  () => clients.value.filter((c) => !c.archived && c.statusKey === 'producao').length
+)
+
+const totalAtivosFidelizados = computed<number>(
+  () =>
+    clients.value.filter(
+      (c) => !c.archived && (c.statusKey === 'ativo' || c.statusKey === 'fidelizado')
+    ).length
+)
+
+const taxaRetencao = computed<number>(() => {
+  if (totalClientes.value === 0) return 0
+  return Math.round((totalAtivosFidelizados.value / totalClientes.value) * 100)
 })
 
+/* ---------- Filtros e Paginação ---------- */
 const filteredClients = computed<Client[]>(() => {
   return clients.value.filter((client) => {
     let matchesTab = true
     if (activeTab.value === 'Arquivados') {
       matchesTab = Boolean(client.archived)
-    } else if (activeTab.value === 'PF' || activeTab.value === 'PJ') {
-      matchesTab = !client.archived && client.group === activeTab.value
+    } else if (activeTab.value === 'Ativos') {
+      matchesTab = !client.archived && (client.statusKey === 'ativo' || client.statusKey === 'fidelizado')
+    } else if (activeTab.value === 'Em Produção') {
+      matchesTab = !client.archived && (client.statusKey === 'producao' || client.statusKey === 'medicao')
     } else {
       matchesTab = !client.archived
     }
@@ -108,52 +205,81 @@ const filteredClients = computed<Client[]>(() => {
       !q ||
       client.name.toLowerCase().includes(q) ||
       client.email.toLowerCase().includes(q) ||
-      client.typeLabel.toLowerCase().includes(q) ||
+      client.telefone.toLowerCase().includes(q) ||
       client.statusLabel.toLowerCase().includes(q)
 
     return matchesTab && matchesQuery
   })
 })
 
-function addClient() {
-  if (!newClient.value.name.trim() || !newClient.value.email.trim()) return
+const totalPaginas = computed(() =>
+  Math.max(1, Math.ceil(filteredClients.value.length / porPagina))
+)
 
-  const initials = newClient.value.name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((word) => word.charAt(0).toUpperCase())
-    .join('')
+const paginasLista = computed(() =>
+  Array.from({ length: totalPaginas.value }, (_, i) => i + 1)
+)
 
-  const isPJ = newClient.value.typeLabel !== 'Pessoa Física'
+const paginatedClients = computed<Client[]>(() => {
+  const ini = (currentPage.value - 1) * porPagina
+  return filteredClients.value.slice(ini, ini + porPagina)
+})
 
-  clients.value.unshift({
-    id: Date.now(),
-    initials: initials || 'NC',
-    name: newClient.value.name.trim(),
-    email: newClient.value.email.trim(),
-    typeLabel: newClient.value.typeLabel,
-    group: isPJ ? 'PJ' : 'PF',
-    statusKey: 'ativo',
-    statusLabel: 'ATIVO',
-    lastContact: 'Agora',
-  })
+/* ---------- Cadastrar Novo Cliente na API ---------- */
+async function addClient() {
+  if (!newClient.value.name.trim() || !newClient.value.email.trim() || salvando.value) return
+  salvando.value = true
 
-  totalClientes.value += 1
-  newClient.value = {
-    name: '',
-    email: '',
-    typeLabel: 'Pessoa Física',
+  try {
+    const prazo = new Date()
+    prazo.setDate(prazo.getDate() + 30)
+
+    const res = await fetch(`${API_URL}/orcamento/cadastrar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({
+        usuarioId: usuarioLogado?.id || 1,
+        nomeCliente: newClient.value.name.trim(),
+        telefoneCliente: newClient.value.telefone.trim() || '(00) 00000-0000',
+        emailCliente: newClient.value.email.trim(),
+        enderecoObra: newClient.value.endereco.trim() || 'Endereço não informado',
+        prazoEstimado: prazo.toISOString(),
+        valorTotal: 0,
+        status: 'ENVIADO',
+      }),
+    })
+
+    if (!res.ok) throw new Error('Falha ao cadastrar cliente na API.')
+
+    newClient.value = {
+      name: '',
+      email: '',
+      telefone: '',
+      endereco: '',
+    }
+    showModal.value = false
+    await carregarClientes()
+  } catch (err) {
+    console.error('Erro ao salvar cliente:', err)
+    alert('Não foi possível salvar o cliente na API.')
+  } finally {
+    salvando.value = false
   }
-  showModal.value = false
+}
+
+function alternarArquivo(client: Client) {
+  client.archived = !client.archived
 }
 
 function baixarCsv() {
-  const header = ['Nome / Razão Social', 'E-mail', 'Tipo', 'Status', 'Último Contato']
+  const header = ['Nome', 'E-mail', 'Telefone', 'Status', 'Último Contato']
   const rows = filteredClients.value.map((c) => [
     `"${c.name}"`,
     `"${c.email}"`,
-    `"${c.typeLabel}"`,
+    `"${c.telefone}"`,
     `"${c.statusLabel}"`,
     `"${c.lastContact}"`,
   ])
@@ -170,6 +296,10 @@ function baixarCsv() {
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
 }
+
+onMounted(() => {
+  carregarClientes()
+})
 </script>
 
 <template>
@@ -177,7 +307,7 @@ function baixarCsv() {
     <Sidebar @navigate="aoNavegar" />
 
     <main class="main-area">
-      <!-- Top Navbar -->
+      <!-- Top Navbar (padrão Home) -->
       <header class="topbar">
         <div class="topbar-inner">
           <div class="search-box">
@@ -192,7 +322,7 @@ function baixarCsv() {
           </div>
 
           <div class="topbar-actions">
-            <button type="button" class="icon-btn" aria-label="Notificações">
+            <button type="button" class="icon-btn" aria-label="Notificações" @click="carregarClientes" title="Atualizar lista">
               <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
@@ -209,14 +339,10 @@ function baixarCsv() {
 
             <div class="user-profile">
               <div class="user-info">
-                <p class="user-name">Ricardo Almeida</p>
-                <p class="user-role">Gestor de Produção</p>
+                <p class="user-name">{{ nomeUsuario }}</p>
+                <p class="user-role">{{ cargoUsuario }}</p>
               </div>
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
-                alt="Ricardo Almeida"
-                class="user-avatar"
-              />
+              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
             </div>
           </div>
         </div>
@@ -233,7 +359,7 @@ function baixarCsv() {
                   <path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zm10 0c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2zM7.17 14.75l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1.003 1.003 0 0020 4H5.21l-.94-2H1v2h2l3.6 7.59-1.35 2.44C4.52 15.37 5.48 17 7 17h12v-2H7.42c-.14 0-.25-.11-.25-.25z" />
                 </svg>
               </div>
-              <span class="pill green">+5.2%</span>
+              <span class="pill green">Base Ativa</span>
             </div>
             <p class="kpi-label">Total de Clientes</p>
             <p class="kpi-value">{{ formattedTotalClientes }}</p>
@@ -247,8 +373,8 @@ function baixarCsv() {
                 </svg>
               </div>
             </div>
-            <p class="kpi-label">Novos Prospectos</p>
-            <p class="kpi-value">42</p>
+            <p class="kpi-label">Em Medição / Prospectos</p>
+            <p class="kpi-value">{{ totalProspectos }}</p>
           </div>
 
           <div class="card kpi-card">
@@ -260,8 +386,8 @@ function baixarCsv() {
                 </svg>
               </div>
             </div>
-            <p class="kpi-label">Aguardando Retorno</p>
-            <p class="kpi-value">18</p>
+            <p class="kpi-label">Obras em Produção</p>
+            <p class="kpi-value">{{ totalAguardando }}</p>
           </div>
 
           <div class="card kpi-card">
@@ -271,10 +397,10 @@ function baixarCsv() {
                   <path d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z" />
                 </svg>
               </div>
-              <span class="pill green-strong">84% Retenção</span>
+              <span class="pill green-strong">{{ taxaRetencao }}% Ativos</span>
             </div>
-            <p class="kpi-label">Clientes Ativos</p>
-            <p class="kpi-value">892</p>
+            <p class="kpi-label">Clientes Ativos / Fidelizados</p>
+            <p class="kpi-value">{{ totalAtivosFidelizados }}</p>
           </div>
         </section>
 
@@ -292,7 +418,7 @@ function baixarCsv() {
                   v-for="tab in tabs"
                   :key="tab"
                   type="button"
-                  @click="activeTab = tab"
+                  @click="activeTab = tab; currentPage = 1"
                   :class="['tab-btn', { active: activeTab === tab }]"
                 >
                   {{ tab }}
@@ -312,15 +438,21 @@ function baixarCsv() {
             <table class="clients-table">
               <thead>
                 <tr>
-                  <th>Nome / Razão Social</th>
-                  <th>Tipo</th>
+                  <th>Cliente</th>
+                  <th>Telefone</th>
                   <th>Status</th>
                   <th>Último Contato</th>
                   <th class="text-right">Ações</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="client in filteredClients" :key="client.id">
+                <tr v-if="carregando">
+                  <td colspan="5" class="empty-row">
+                    Carregando clientes da API...
+                  </td>
+                </tr>
+
+                <tr v-else v-for="client in paginatedClients" :key="client.id">
                   <td>
                     <div class="client-cell">
                       <span class="client-avatar">{{ client.initials }}</span>
@@ -331,7 +463,7 @@ function baixarCsv() {
                     </div>
                   </td>
 
-                  <td class="client-type">{{ client.typeLabel }}</td>
+                  <td class="client-type">{{ client.telefone }}</td>
 
                   <td>
                     <span :class="['status-badge', `status-${client.statusKey}`]">
@@ -342,7 +474,12 @@ function baixarCsv() {
                   <td class="last-contact">{{ client.lastContact }}</td>
 
                   <td class="text-right">
-                    <button type="button" class="dots-btn" title="Opções do cliente">
+                    <button
+                      type="button"
+                      class="dots-btn"
+                      :title="client.archived ? 'Desarquivar cliente' : 'Arquivar cliente'"
+                      @click="alternarArquivo(client)"
+                    >
                       <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
                       </svg>
@@ -350,7 +487,7 @@ function baixarCsv() {
                   </td>
                 </tr>
 
-                <tr v-if="filteredClients.length === 0">
+                <tr v-if="!carregando && paginatedClients.length === 0">
                   <td colspan="5" class="empty-row">
                     Nenhum cliente encontrado para o filtro selecionado.
                   </td>
@@ -360,12 +497,12 @@ function baixarCsv() {
           </div>
 
           <div class="table-footer">
-            <span>Mostrando 1 a 10 de {{ formattedTotalClientes }} clientes</span>
+            <span>Mostrando {{ paginatedClients.length }} de {{ filteredClients.length }} clientes</span>
 
             <div class="pagination">
               <button type="button" @click="currentPage = Math.max(1, currentPage - 1)">&lsaquo;</button>
               <button
-                v-for="page in [1, 2, 3]"
+                v-for="page in paginasLista"
                 :key="page"
                 type="button"
                 :class="{ active: currentPage === page }"
@@ -373,7 +510,7 @@ function baixarCsv() {
               >
                 {{ page }}
               </button>
-              <button type="button" @click="currentPage = Math.min(3, currentPage + 1)">&rsaquo;</button>
+              <button type="button" @click="currentPage = Math.min(totalPaginas, currentPage + 1)">&rsaquo;</button>
             </div>
           </div>
         </section>
@@ -406,9 +543,9 @@ function baixarCsv() {
             </div>
             <div class="info-content">
               <h3>Contatos Recentes</h3>
-              <p>14 interações nas últimas 24h</p>
+              <p>{{ totalClientes }} clientes cadastrados na base</p>
               <div class="stock-track">
-                <div class="stock-fill" style="width: 68%"></div>
+                <div class="stock-fill" :style="{ width: `${Math.min(100, taxaRetencao)}%` }"></div>
               </div>
             </div>
           </div>
@@ -446,12 +583,12 @@ function baixarCsv() {
 
           <form @submit.prevent="addClient" class="modal-form">
             <div>
-              <label>Nome ou Razão Social</label>
+              <label>Nome do Cliente</label>
               <input
                 v-model="newClient.name"
                 type="text"
                 required
-                placeholder="Ex.: Construtora Horizonte"
+                placeholder="Ex.: Marina Lins"
               />
             </div>
 
@@ -461,22 +598,33 @@ function baixarCsv() {
                 v-model="newClient.email"
                 type="email"
                 required
-                placeholder="contato@empresa.com.br"
+                placeholder="cliente@email.com"
               />
             </div>
 
             <div>
-              <label>Tipo de Cadastro</label>
-              <select v-model="newClient.typeLabel">
-                <option value="Pessoa Física">Pessoa Física</option>
-                <option value="Pessoa Jurídica">Pessoa Jurídica</option>
-                <option value="Condomínio (PJ)">Condomínio (PJ)</option>
-              </select>
+              <label>WhatsApp / Telefone</label>
+              <input
+                v-model="newClient.telefone"
+                type="text"
+                placeholder="(14) 99999-0000"
+              />
+            </div>
+
+            <div>
+              <label>Endereço da Obra</label>
+              <input
+                v-model="newClient.endereco"
+                type="text"
+                placeholder="Ex.: Rua das Acácias, 120"
+              />
             </div>
 
             <div class="modal-actions">
               <button type="button" class="btn-cancel" @click="showModal = false">Cancelar</button>
-              <button type="submit" class="btn-submit">Salvar Cliente</button>
+              <button type="submit" class="btn-submit" :disabled="salvando">
+                {{ salvando ? 'Salvando...' : 'Salvar Cliente' }}
+              </button>
             </div>
           </form>
         </div>
@@ -505,7 +653,7 @@ function baixarCsv() {
   flex-direction: column;
 }
 
-/* Topbar */
+/* Topbar (padrão Home) */
 .topbar {
   background: #FFFFFF;
   border-bottom: 1px solid #F1F5F9;
@@ -620,11 +768,17 @@ function baixarCsv() {
   color: #64748B;
 }
 
-.user-avatar {
+.user-avatar-initials {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  object-fit: cover;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #E2E8F0;
 }
 
@@ -1135,8 +1289,7 @@ function baixarCsv() {
   margin-bottom: 6px;
 }
 
-.modal-form input,
-.modal-form select {
+.modal-form input {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid #CBD5E1;
@@ -1147,8 +1300,7 @@ function baixarCsv() {
   outline: none;
 }
 
-.modal-form input:focus,
-.modal-form select:focus {
+.modal-form input:focus {
   border-color: #2563EB;
 }
 
@@ -1179,6 +1331,11 @@ function baixarCsv() {
   color: #FFFFFF;
   border-radius: 10px;
   cursor: pointer;
+}
+
+.btn-submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 /* Responsividade */

@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 
-const menuAtivo = ref('Dashboard')
+const route = useRoute()
 
-const emit = defineEmits<{
-  (e: 'navigate', menu: string): void
-}>()
+const projetosAberto = computed(() => route.path.startsWith('/projetos'))
+const equipesAberto = computed(() => route.path.startsWith('/equipes'))
 
-function selecionarMenu(nome: string) {
-  menuAtivo.value = nome
-  emit('navigate', nome)
+function isActive(path: string) {
+  return route.path === path || route.path.startsWith(path + '/')
 }
 </script>
 
@@ -20,12 +19,8 @@ function selecionarMenu(nome: string) {
     </div>
 
     <nav class="sidebar__nav">
-      <a 
-        href="#" 
-        class="sidebar__link" 
-        :class="{ active: menuAtivo === 'Dashboard' }"
-        @click.prevent="selecionarMenu('Dashboard')"
-      >
+      <!-- Dashboard -->
+      <router-link to="/home" class="sidebar__link" :class="{ active: isActive('/home') }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="7" height="7" rx="1"/>
           <rect x="14" y="3" width="7" height="7" rx="1"/>
@@ -33,39 +28,41 @@ function selecionarMenu(nome: string) {
           <rect x="3" y="14" width="7" height="7" rx="1"/>
         </svg>
         Dashboard
-      </a>
+      </router-link>
 
-      <a 
-        href="#" 
-        class="sidebar__link" 
-        :class="{ active: menuAtivo === 'Projetos' }"
-        @click.prevent="selecionarMenu('Projetos')"
-      >
+      <!-- Projetos + submenu -->
+      <router-link to="/projetos" class="sidebar__link" :class="{ active: isActive('/projetos') }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
         </svg>
         Projetos
-      </a>
+      </router-link>
 
-      <a 
-        href="#" 
-        class="sidebar__link" 
-        :class="{ active: menuAtivo === 'Liberações' }"
-        @click.prevent="selecionarMenu('Liberações')"
-      >
+      <div v-if="projetosAberto" class="sidebar__sub">
+        <router-link
+          to="/projetos/novo"
+          class="sidebar__sublink"
+          :class="{ active: route.path === '/projetos/novo' }"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Novo Projeto
+        </router-link>
+      </div>
+
+      <!-- Liberações -->
+      <router-link to="/liberacao" class="sidebar__link" :class="{ active: isActive('/liberacao') }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 11l3 3L22 4"/>
           <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
         </svg>
         Liberações
-      </a>
+      </router-link>
 
-      <a 
-        href="#" 
-        class="sidebar__link" 
-        :class="{ active: menuAtivo === 'Clientes' }"
-        @click.prevent="selecionarMenu('Clientes')"
-      >
+      <!-- Clientes -->
+      <router-link to="/clientes" class="sidebar__link" :class="{ active: isActive('/clientes') }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
@@ -73,14 +70,10 @@ function selecionarMenu(nome: string) {
           <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
         </svg>
         Clientes
-      </a>
+      </router-link>
 
-      <a 
-        href="#" 
-        class="sidebar__link" 
-        :class="{ active: menuAtivo === 'Relatórios' }"
-        @click.prevent="selecionarMenu('Relatórios')"
-      >
+      <!-- Relatórios -->
+      <router-link to="/relatorio" class="sidebar__link" :class="{ active: isActive('/relatorio') }">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
@@ -88,7 +81,42 @@ function selecionarMenu(nome: string) {
           <line x1="16" y1="17" x2="8" y2="17"/>
         </svg>
         Relatórios
-      </a>
+      </router-link>
+
+      <!-- Equipes + submenu -->
+      <router-link to="/equipes" class="sidebar__link" :class="{ active: isActive('/equipes') }">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+          <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+        </svg>
+        Equipes
+      </router-link>
+
+      <div v-if="equipesAberto" class="sidebar__sub">
+        <router-link
+          to="/equipes/tecnicos"
+          class="sidebar__sublink"
+          :class="{ active: route.path === '/equipes/tecnicos' }"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="8.5" cy="7" r="4"/>
+            <line x1="20" y1="8" x2="20" y2="14"/>
+            <line x1="23" y1="11" x2="17" y2="11"/>
+          </svg>
+          Técnicos
+        </router-link>
+      </div>
+
+      <!-- Ocorrências -->
+      <router-link to="/ocorrencia" class="sidebar__link" :class="{ active: isActive('/ocorrencia') }">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Ocorrências
+      </router-link>
     </nav>
 
     <div class="sidebar__footer">
@@ -113,6 +141,8 @@ function selecionarMenu(nome: string) {
 .sidebar {
   width: 260px;
   height: 100vh;
+  position: sticky;
+  top: 0;
   background-color: #1b388a;
   color: #ffffff;
   display: flex;
@@ -121,6 +151,7 @@ function selecionarMenu(nome: string) {
   box-sizing: border-box;
   flex-shrink: 0;
   font-family: 'Inter', system-ui, -apple-system, Roboto, sans-serif;
+  overflow-y: auto;
 }
 
 .sidebar__brand {
@@ -169,8 +200,42 @@ function selecionarMenu(nome: string) {
   font-weight: 700;
 }
 
+/* Submenu */
+.sidebar__sub {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -2px 0 0 22px;
+  padding-left: 14px;
+  border-left: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+.sidebar__sublink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  color: #93c5fd;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.sidebar__sublink:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.sidebar__sublink.active {
+  background-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  font-weight: 700;
+}
+
 .sidebar__footer {
-  margin-top: auto;
+  margin-top: 16px;
 }
 
 .support-card {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { setSessao } from '../utils/auth'
 
 const router = useRouter()
 
@@ -11,6 +12,8 @@ const mostrarSenha = ref(false)
 const carregando = ref(false)
 const erro = ref('')
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+
 const stats = [
   { valor: '142', rotulo: 'Projetos ativos' },
   { valor: '82.4%', rotulo: 'Conversão' },
@@ -19,17 +22,46 @@ const stats = [
 
 async function entrar() {
   erro.value = ''
+
   if (!email.value || !senha.value) {
     erro.value = 'Informe seu e-mail e sua senha.'
     return
   }
+
   carregando.value = true
+
   try {
-    await new Promise((r) => setTimeout(r, 800))
-    localStorage.setItem('usuario_logado', 'true')
-    router.push('/home')
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: email.value,
+        numero: '',
+        password: senha.value,
+      }),
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      erro.value = data.mensagem || data.title || 'Credenciais inválidas.'
+      return
+    }
+
+    // Salva apenas em memória (perde o acesso ao atualizar a página)
+    setSessao(data.token, data.usuario)
+
+    const role = data.usuario.roles?.toUpperCase() || 'TECNICO_CAMPO'
+
+    if (role === 'GESTOR') {
+      router.push('/home')
+    } else {
+      router.push('/projetos')
+    }
   } catch (e) {
-    erro.value = 'Não foi possível entrar. Verifique seus dados.'
+    erro.value = 'Não foi possível conectar ao servidor. Verifique se a API está rodando.'
   } finally {
     carregando.value = false
   }
