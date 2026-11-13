@@ -26,10 +26,6 @@ interface Occurrence {
   images: string[]
 }
 
-function aoNavegar(menu: string) {
-  console.log('Menu selecionado:', menu)
-}
-
 const searchQuery = ref<string>('')
 const activeTab = ref<FilterTab>('Todos')
 const selectedPeriod = ref<string>('Últimos 30 dias')
@@ -217,7 +213,7 @@ function salvarAlteracoes() {
 
 <template>
   <div class="layout-wrapper">
-    <Sidebar @navigate="aoNavegar" />
+    <Sidebar />
 
     <div class="workspace-shell">
       <!-- Área Principal (Esquerda / Centro) -->
@@ -235,6 +231,35 @@ function salvarAlteracoes() {
               type="text"
               placeholder="Buscar pendências, obras ou clientes..."
             />
+          </div>
+
+          <div class="topbar-actions">
+            <button type="button" class="icon-btn" aria-label="Notificações">
+              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              <span class="notif-dot"></span>
+            </button>
+
+            <button type="button" class="icon-btn" aria-label="Calendário">
+              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </button>
+
+            <div class="divider"></div>
+
+            <div class="user-profile">
+              <div class="user-info">
+                <p class="user-name">Ricardo Almeida</p>
+                <p class="user-role">Gestor de Produção</p>
+              </div>
+              <img
+                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
+                alt="Ricardo Almeida"
+                class="user-avatar"
+              />
+            </div>
           </div>
         </header>
 
@@ -567,6 +592,80 @@ function salvarAlteracoes() {
   background: #FFFFFF;
   border-color: #93C5FD;
   box-shadow: 0 0 0 3px #EFF6FF;
+}
+
+/* Ações do topo (notificações, calendário, usuário) */
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  position: relative;
+  background: transparent;
+  border: none;
+  color: #475569;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover {
+  background: #F1F5F9;
+}
+
+.notif-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #EF4444;
+  border: 2px solid #FFFFFF;
+}
+
+.divider {
+  width: 1px;
+  height: 28px;
+  background: #E2E8F0;
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-info {
+  text-align: right;
+}
+
+.user-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1E293B;
+}
+
+.user-role {
+  margin: 0;
+  font-size: 11px;
+  color: #64748B;
+}
+
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid #E2E8F0;
 }
 
 /* Corpo Principal */
@@ -1170,6 +1269,12 @@ function salvarAlteracoes() {
     top: 0;
     width: 100%;
     max-width: 380px;
+  }
+}
+
+@media (max-width: 768px) {
+  .user-info {
+    display: none;
   }
 }
 </style>

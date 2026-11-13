@@ -1,19 +1,47 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import Sidebar from '../Components/Sidebar.vue'
+import { getToken, getUsuario } from '../utils/auth'
 
 type TabCategory = 'Todos' | 'Medição' | 'Produção' | 'Liberação' | 'Instalação'
 type StatusKey = 'medicao' | 'producao' | 'instalacao' | 'concluido' | 'liberacao'
 
+interface ProjetoApi {
+  id: number
+  orcamentoId: number
+  tecnicoId?: number | null
+  dataMedicaoFinal?: string | null
+  dataInicioContrato: string
+  prazoFinalEntrega?: string | null
+  statusProducao: string
+}
+
+interface OrcamentoApi {
+  id: number
+  usuarioId: number
+  nomeCliente: string
+  telefoneCliente?: string
+  emailCliente?: string
+  enderecoObra?: string
+  dataCriacao: string
+  prazoEstimado?: string | null
+  valorTotal: number
+  status: string
+}
+
 interface Order {
   id: string
+  rawId: number
   initials: string
   client: string
+  obra: string
   category: Exclude<TabCategory, 'Todos'>
   statusKey: StatusKey
   statusLabel: string
   cycleText: string
   progress: number
+  diasRestantes: number
 }
 
 interface CriticalAlert {
@@ -25,6 +53,29 @@ interface CriticalAlert {
   dotColor: string
 }
 
+const router = useRouter()
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+
+const usuarioLogado = getUsuario()
+
+const nomeUsuario = computed(() => usuarioLogado?.nome || 'Usuário')
+
+const cargoUsuario = computed(() => {
+  const role = usuarioLogado?.roles?.toUpperCase()
+  if (role === 'GESTOR') return 'Gestor'
+  if (role === 'TECNICO_CAMPO') return 'Técnico de Campo'
+  return role || 'Colaborador'
+})
+
+const iniciaisUsuario = computed(() => {
+  return nomeUsuario.value
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase())
+    .join('')
+})
+
 function aoNavegar(menu: string) {
   console.log('Menu selecionado:', menu)
 }
@@ -32,81 +83,167 @@ function aoNavegar(menu: string) {
 const searchQuery = ref<string>('')
 const activeTab = ref<TabCategory>('Todos')
 const currentPage = ref<number>(1)
+const pageSize = 6
 const showModal = ref<boolean>(false)
-const newClientName = ref<string>('')
-const totalPedidos = ref<number>(142)
+const salvandoPedido = ref<boolean>(false)
+const carregando = ref<boolean>(false)
+
+// Campos do modal (compatíveis com CriarOrcamentoDto)
+const novoPedido = ref({
+  nomeCliente: '',
+  telefoneCliente: '',
+  enderecoObra: '',
+  prazoDias: 45,
+})
 
 const tabs: TabCategory[] = ['Todos', 'Medição', 'Produção', 'Liberação', 'Instalação']
 
-const orders = ref<Order[]>([
-  {
-    id: '#ORD-8921',
-    initials: 'ML',
-    client: 'Marina Lins',
-    category: 'Medição',
-    statusKey: 'medicao',
-    statusLabel: 'AGUARDANDO MEDIÇÃO',
-    cycleText: 'Dia 12/45',
-    progress: 26,
-  },
-  {
-    id: '#ORD-8915',
-    initials: 'CO',
-    client: 'Construtora Omega',
-    category: 'Produção',
-    statusKey: 'producao',
-    statusLabel: 'EM PRODUÇÃO',
-    cycleText: 'Dia 38/45',
-    progress: 84,
-  },
-  {
-    id: '#ORD-8890',
-    initials: 'JA',
-    client: 'Joaquim Azevedo',
-    category: 'Instalação',
-    statusKey: 'instalacao',
-    statusLabel: 'EM INSTALAÇÃO',
-    cycleText: 'Dia 42/45',
-    progress: 93,
-  },
-  {
-    id: '#ORD-8854',
-    initials: 'RF',
-    client: 'Residencial Florada',
-    category: 'Liberação',
-    statusKey: 'concluido',
-    statusLabel: 'CONCLUÍDO',
-    cycleText: 'Finalizado em 44d',
-    progress: 100,
-  },
-])
+const orders = ref<Order[]>([])
+const totalOrcamentos = ref<number>(0)
 
-const criticalAlerts = ref<CriticalAlert[]>([
-  {
-    id: '#ORD-8812',
-    days: '43/45 dias',
-    urgent: true,
-    project: 'Hotel Blue Horizon',
-    note: 'Instalação Pendente',
-    dotColor: '#9333EA',
-  },
-  {
-    id: '#ORD-8809',
-    days: '42/45 dias',
-    urgent: true,
-    project: 'Sede Administrativa PJ',
-    note: 'Produção Atrasada',
-    dotColor: '#2563EB',
-  },
-  {
-    id: '#ORD-8834',
-    days: '40/45 dias',
-    urgent: false,
-    project: 'Condomínio Solar',
-    note: 'Ajuste Medição',
-    dotColor: '#EAB308',
-  },
-])
+// KPIs reais vindos da API
+const totalPedidos = computed(() => orders.value.length)
+const qtdMedicao = computed(() => orders.value.filter((o) => o.statusKey === 'medicao').length)
+const qtdProducao = computed(() => orders.value.filter((o) => o.statusKey === 'producao').length)
+const qtdProntoInstalacao = computed(
+  () => orders.value.filter((o) => o.statusKey === 'liberacao' || o.statusKey === 'instalacao').length
+)
+
+// Prazos Críticos reais (projetos com >= 80% do ciclo consumido e não concluídos)
+const criticalAlerts = computed<CriticalAlert[]>(() => {
+  return orders.value
+    .filter((o) => o.progress >= 80 && o.statusKey !== 'concluido')
+    .sort((a, b) => b.progress - a.progress)
+    .slice(0, 3)
+    .map((o) => ({
+      id: o.id,
+      days: o.diasRestantes < 0 ? `${Math.abs(o.diasRestantes)}d atrasado` : `${o.cycleText.replace('Dia ', '')} dias`,
+      urgent: o.progress >= 90 || o.diasRestantes <= 3,
+      project: o.client,
+      note: o.statusLabel,
+      dotColor:
+        o.statusKey === 'instalacao'
+          ? '#9333EA'
+          : o.statusKey === 'producao'
+            ? '#2563EB'
+            : '#EAB308',
+    }))
+})
+
+function gerarIniciais(nome: string): string {
+  return (
+    nome
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w.charAt(0).toUpperCase())
+      .join('') || 'CL'
+  )
+}
+
+function mapearStatusProducao(status: string): {
+  category: Exclude<TabCategory, 'Todos'>
+  statusKey: StatusKey
+  statusLabel: string
+} {
+  const s = (status || '').toUpperCase()
+
+  if (s.includes('PRODU')) {
+    return { category: 'Produção', statusKey: 'producao', statusLabel: 'EM PRODUÇÃO' }
+  }
+  if (s.includes('INSTAL')) {
+    return { category: 'Instalação', statusKey: 'instalacao', statusLabel: 'EM INSTALAÇÃO' }
+  }
+  if (s.includes('LIBER')) {
+    return { category: 'Liberação', statusKey: 'liberacao', statusLabel: 'LIBERADO P/ INSTALAÇÃO' }
+  }
+  if (s.includes('CONCLU') || s.includes('FINAL')) {
+    return { category: 'Liberação', statusKey: 'concluido', statusLabel: 'CONCLUÍDO' }
+  }
+  return { category: 'Medição', statusKey: 'medicao', statusLabel: 'AGUARDANDO MEDIÇÃO' }
+}
+
+function calcularCiclo(inicioIso: string, fimIso?: string | null, concluido?: boolean) {
+  const inicio = new Date(inicioIso)
+  const hoje = new Date()
+  const fim = fimIso ? new Date(fimIso) : new Date(inicio.getTime() + 45 * 24 * 60 * 60 * 1000)
+
+  const msPorDia = 1000 * 60 * 60 * 24
+  const totalDias = Math.max(1, Math.round((fim.getTime() - inicio.getTime()) / msPorDia))
+  const diasPassados = Math.max(1, Math.round((hoje.getTime() - inicio.getTime()) / msPorDia))
+  const diasRestantes = Math.round((fim.getTime() - hoje.getTime()) / msPorDia)
+
+  if (concluido) {
+    return {
+      cycleText: `Finalizado em ${diasPassados}d`,
+      progress: 100,
+      diasRestantes: 0,
+    }
+  }
+
+  const progress = Math.min(100, Math.max(4, Math.round((diasPassados / totalDias) * 100)))
+  return {
+    cycleText: `Dia ${diasPassados}/${totalDias}`,
+    progress,
+    diasRestantes,
+  }
+}
+
+async function carregarDashboard() {
+  carregando.value = true
+  try {
+    const headers = {
+      Authorization: `Bearer ${getToken()}`,
+    }
+
+    const [resProjetos, resOrcamentos] = await Promise.all([
+      fetch(`${API_URL}/projeto`, { headers }),
+      fetch(`${API_URL}/orcamento`, { headers }),
+    ])
+
+    const projetos: ProjetoApi[] = resProjetos.ok ? await resProjetos.json() : []
+    const orcamentos: OrcamentoApi[] = resOrcamentos.ok ? await resOrcamentos.json() : []
+
+    totalOrcamentos.value = orcamentos.length
+
+    // Mapeia orçamentos por ID para pegar o NomeCliente e EnderecoObra de cada projeto
+    const mapaOrcamentos = new Map<number, OrcamentoApi>()
+    for (const orc of orcamentos) {
+      mapaOrcamentos.set(orc.id, orc)
+    }
+
+    orders.value = projetos
+      .map((proj) => {
+        const orc = mapaOrcamentos.get(proj.orcamentoId)
+        const nomeCliente = orc?.nomeCliente || `Orçamento #${proj.orcamentoId}`
+        const statusInfo = mapearStatusProducao(proj.statusProducao)
+        const ciclo = calcularCiclo(
+          proj.dataInicioContrato,
+          proj.prazoFinalEntrega || orc?.prazoEstimado,
+          statusInfo.statusKey === 'concluido'
+        )
+
+        return {
+          id: `#ORD-${proj.id}`,
+          rawId: proj.id,
+          initials: gerarIniciais(nomeCliente),
+          client: nomeCliente,
+          obra: orc?.enderecoObra || '',
+          category: statusInfo.category,
+          statusKey: statusInfo.statusKey,
+          statusLabel: statusInfo.statusLabel,
+          cycleText: ciclo.cycleText,
+          progress: ciclo.progress,
+          diasRestantes: ciclo.diasRestantes,
+        }
+      })
+      .sort((a, b) => b.rawId - a.rawId)
+  } catch (err) {
+    console.error('Erro ao carregar dados do dashboard:', err)
+  } finally {
+    carregando.value = false
+  }
+}
 
 const filteredOrders = computed<Order[]>(() => {
   return orders.value.filter((order) => {
@@ -116,36 +253,87 @@ const filteredOrders = computed<Order[]>(() => {
       !q ||
       order.id.toLowerCase().includes(q) ||
       order.client.toLowerCase().includes(q) ||
+      order.obra.toLowerCase().includes(q) ||
       order.statusLabel.toLowerCase().includes(q)
     return matchesTab && matchesQuery
   })
 })
 
-function addOrder() {
-  if (!newClientName.value.trim()) return
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredOrders.value.length / pageSize)))
 
-  const initials = newClientName.value
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((word) => word.charAt(0).toUpperCase())
-    .join('')
+const paginatedOrders = computed<Order[]>(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filteredOrders.value.slice(start, start + pageSize)
+})
 
-  orders.value.unshift({
-    id: `#ORD-${Math.floor(8922 + Math.random() * 70)}`,
-    initials: initials || 'NP',
-    client: newClientName.value.trim(),
-    category: 'Medição',
-    statusKey: 'medicao',
-    statusLabel: 'AGUARDANDO MEDIÇÃO',
-    cycleText: 'Dia 1/45',
-    progress: 4,
-  })
+// Cria o orçamento e aprova imediatamente para gerar o Projeto no banco via OrcamentoController
+async function addOrder() {
+  if (!novoPedido.value.nomeCliente.trim() || salvandoPedido.value) return
 
-  totalPedidos.value += 1
-  newClientName.value = ''
-  showModal.value = false
+  salvandoPedido.value = true
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+    }
+
+    const prazoEntrega = new Date()
+    prazoEntrega.setDate(prazoEntrega.getDate() + (novoPedido.value.prazoDias || 45))
+
+    // 1. Cadastra o orçamento (POST /api/orcamento/cadastrar)
+    const resCriar = await fetch(`${API_URL}/orcamento/cadastrar`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        usuarioId: usuarioLogado?.id || 1,
+        nomeCliente: novoPedido.value.nomeCliente.trim(),
+        telefoneCliente: novoPedido.value.telefoneCliente.trim(),
+        emailCliente: '',
+        enderecoObra: novoPedido.value.enderecoObra.trim(),
+        prazoEstimado: prazoEntrega.toISOString(),
+        valorTotal: 0,
+        status: 'RASCUNHO',
+      }),
+    })
+
+    if (!resCriar.ok) return
+
+    const criado = await resCriar.json()
+
+    // 2. Aprova o orçamento (PUT /api/orcamento/{id}) -> cria o Projeto automaticamente no backend
+    await fetch(`${API_URL}/orcamento/${criado.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        nomeCliente: novoPedido.value.nomeCliente.trim(),
+        telefoneCliente: novoPedido.value.telefoneCliente.trim(),
+        emailCliente: '',
+        enderecoObra: novoPedido.value.enderecoObra.trim(),
+        prazoEstimado: prazoEntrega.toISOString(),
+        valorTotal: 0,
+        status: 'APROVADO',
+      }),
+    })
+
+    await carregarDashboard()
+
+    novoPedido.value = {
+      nomeCliente: '',
+      telefoneCliente: '',
+      enderecoObra: '',
+      prazoDias: 45,
+    }
+    showModal.value = false
+  } catch (err) {
+    console.error('Erro ao criar pedido:', err)
+  } finally {
+    salvandoPedido.value = false
+  }
 }
+
+onMounted(() => {
+  carregarDashboard()
+})
 </script>
 
 <template>
@@ -163,19 +351,20 @@ function addOrder() {
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="Buscar pedidos, clientes ou projetos..."
+              placeholder="Buscar pedidos, clientes ou obras..."
+              @input="currentPage = 1"
             />
           </div>
 
           <div class="topbar-actions">
-            <button type="button" class="icon-btn" aria-label="Notificações">
+            <button type="button" class="icon-btn" aria-label="Atualizar dados" @click="carregarDashboard" title="Atualizar">
               <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
-              <span class="notif-dot"></span>
+              <span v-if="criticalAlerts.length > 0" class="notif-dot"></span>
             </button>
 
-            <button type="button" class="icon-btn" aria-label="Calendário">
+            <button type="button" class="icon-btn" aria-label="Projetos" @click="router.push('/projetos')">
               <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
@@ -185,14 +374,12 @@ function addOrder() {
 
             <div class="user-profile">
               <div class="user-info">
-                <p class="user-name">Ricardo Almeida</p>
-                <p class="user-role">Gestor de Produção</p>
+                <p class="user-name">{{ nomeUsuario }}</p>
+                <p class="user-role">{{ cargoUsuario }}</p>
               </div>
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
-                alt="Ricardo Almeida"
-                class="user-avatar"
-              />
+              <div class="user-avatar-initials" :title="nomeUsuario">
+                {{ iniciaisUsuario }}
+              </div>
             </div>
           </div>
         </div>
@@ -209,7 +396,7 @@ function addOrder() {
                   <path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zm10 0c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2zM7.17 14.75l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1.003 1.003 0 0020 4H5.21l-.94-2H1v2h2l3.6 7.59-1.35 2.44C4.52 15.37 5.48 17 7 17h12v-2H7.42c-.14 0-.25-.11-.25-.25z" />
                 </svg>
               </div>
-              <span class="pill green">+12%</span>
+              <span class="pill green">{{ totalOrcamentos }} orçamentos</span>
             </div>
             <p class="kpi-label">Total de Pedidos</p>
             <p class="kpi-value">{{ totalPedidos }}</p>
@@ -222,10 +409,10 @@ function addOrder() {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M4 5v14a1 1 0 001 1h14M8 20v-3m4 3v-2m4 2v-3M4 9h3m-3 4h2m-2 4h3" />
                 </svg>
               </div>
-              <span class="pill neutral">8 hoje</span>
+              <span class="pill neutral">Etapa 1</span>
             </div>
             <p class="kpi-label">Aguardando Medição</p>
-            <p class="kpi-value">24</p>
+            <p class="kpi-value">{{ qtdMedicao }}</p>
           </div>
 
           <div class="card kpi-card">
@@ -236,10 +423,10 @@ function addOrder() {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </div>
-              <span class="pill neutral">Fase 1 e 2</span>
+              <span class="pill neutral">Fábrica</span>
             </div>
             <p class="kpi-label">Em Produção</p>
-            <p class="kpi-value">38</p>
+            <p class="kpi-value">{{ qtdProducao }}</p>
           </div>
 
           <div class="card kpi-card">
@@ -249,10 +436,10 @@ function addOrder() {
                   <path d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z" />
                 </svg>
               </div>
-              <span class="pill green-strong">4 rotas</span>
+              <span class="pill green-strong">Campo</span>
             </div>
-            <p class="kpi-label">Pronto p/ Instalação</p>
-            <p class="kpi-value">19</p>
+            <p class="kpi-label">Pronto / Instalação</p>
+            <p class="kpi-value">{{ qtdProntoInstalacao }}</p>
           </div>
         </section>
 
@@ -270,7 +457,7 @@ function addOrder() {
                   v-for="tab in tabs"
                   :key="tab"
                   type="button"
-                  @click="activeTab = tab"
+                  @click="activeTab = tab; currentPage = 1"
                   :class="['tab-btn', { active: activeTab === tab }]"
                 >
                   {{ tab }}
@@ -285,17 +472,23 @@ function addOrder() {
                     <th>ID Pedido</th>
                     <th>Cliente</th>
                     <th>Status</th>
-                    <th>Prazo (Ciclo 45d)</th>
+                    <th>Prazo (Ciclo)</th>
                     <th class="text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="order in filteredOrders" :key="order.id">
+                  <tr v-if="carregando">
+                    <td colspan="5" class="empty-row">Carregando projetos da API...</td>
+                  </tr>
+                  <tr v-else v-for="order in paginatedOrders" :key="order.id">
                     <td class="order-id">{{ order.id }}</td>
                     <td>
                       <div class="client-cell">
                         <span class="client-avatar">{{ order.initials }}</span>
-                        <span class="client-name">{{ order.client }}</span>
+                        <div>
+                          <span class="client-name">{{ order.client }}</span>
+                          <small v-if="order.obra" class="client-obra">{{ order.obra }}</small>
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -316,14 +509,19 @@ function addOrder() {
                       </div>
                     </td>
                     <td class="text-right">
-                      <button type="button" class="dots-btn" title="Opções do pedido">
+                      <button
+                        type="button"
+                        class="dots-btn"
+                        title="Ver detalhes em Projetos"
+                        @click="router.push('/projetos')"
+                      >
                         <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
                         </svg>
                       </button>
                     </td>
                   </tr>
-                  <tr v-if="filteredOrders.length === 0">
+                  <tr v-if="!carregando && paginatedOrders.length === 0">
                     <td colspan="5" class="empty-row">
                       Nenhum pedido encontrado para o filtro selecionado.
                     </td>
@@ -333,11 +531,11 @@ function addOrder() {
             </div>
 
             <div class="table-footer">
-              <span>Mostrando 1 a {{ filteredOrders.length }} de {{ totalPedidos }} pedidos</span>
+              <span>Mostrando {{ paginatedOrders.length }} de {{ filteredOrders.length }} pedidos</span>
               <div class="pagination">
                 <button type="button" @click="currentPage = Math.max(1, currentPage - 1)">&lsaquo;</button>
                 <button
-                  v-for="page in [1, 2, 3]"
+                  v-for="page in totalPages"
                   :key="page"
                   type="button"
                   :class="{ active: currentPage === page }"
@@ -345,7 +543,7 @@ function addOrder() {
                 >
                   {{ page }}
                 </button>
-                <button type="button" @click="currentPage = Math.min(3, currentPage + 1)">&rsaquo;</button>
+                <button type="button" @click="currentPage = Math.min(totalPages, currentPage + 1)">&rsaquo;</button>
               </div>
             </div>
           </div>
@@ -362,6 +560,10 @@ function addOrder() {
             </div>
 
             <div class="alerts-body">
+              <p v-if="criticalAlerts.length === 0" class="empty-alerts">
+                Nenhum projeto próximo do vencimento.
+              </p>
+
               <div v-for="alert in criticalAlerts" :key="alert.id" class="alert-item">
                 <div class="alert-top">
                   <span class="alert-id">{{ alert.id }}</span>
@@ -376,8 +578,8 @@ function addOrder() {
                 </div>
               </div>
 
-              <button type="button" class="alerts-all-btn">
-                Ver todos os alertas (5)
+              <button type="button" class="alerts-all-btn" @click="router.push('/projetos')">
+                Ver todos os projetos ({{ totalPedidos }})
               </button>
             </div>
           </aside>
@@ -438,7 +640,7 @@ function addOrder() {
         </section>
       </div>
 
-      <!-- Modal Rápido: Cadastrar Projeto -->
+      <!-- Modal Rápido: Cadastrar Projeto (Cria Orçamento + Aprova para gerar Projeto) -->
       <div v-if="showModal" class="modal-backdrop" @click.self="showModal = false">
         <div class="modal-box">
           <div class="modal-header">
@@ -446,11 +648,29 @@ function addOrder() {
             <button type="button" @click="showModal = false">&times;</button>
           </div>
           <form @submit.prevent="addOrder">
-            <label>Nome do Cliente ou Obra</label>
-            <input v-model="newClientName" type="text" required placeholder="Ex.: Edifício Horizonte" />
+            <div class="modal-fields">
+              <div>
+                <label>Nome do Cliente *</label>
+                <input v-model="novoPedido.nomeCliente" type="text" required placeholder="Ex.: Marina Lins" />
+              </div>
+              <div>
+                <label>Telefone</label>
+                <input v-model="novoPedido.telefoneCliente" type="text" placeholder="(11) 99999-9999" />
+              </div>
+              <div>
+                <label>Endereço da Obra</label>
+                <input v-model="novoPedido.enderecoObra" type="text" placeholder="Rua / Condomínio" />
+              </div>
+              <div>
+                <label>Prazo Estimado (dias)</label>
+                <input v-model.number="novoPedido.prazoDias" type="number" min="1" max="365" />
+              </div>
+            </div>
             <div class="modal-actions">
               <button type="button" class="btn-cancel" @click="showModal = false">Cancelar</button>
-              <button type="submit" class="btn-submit">Criar Pedido</button>
+              <button type="submit" class="btn-submit" :disabled="salvandoPedido">
+                {{ salvandoPedido ? 'Criando...' : 'Criar Pedido' }}
+              </button>
             </div>
           </form>
         </div>
@@ -594,12 +814,19 @@ function addOrder() {
   color: #64748B;
 }
 
-.user-avatar {
+.user-avatar-initials {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  object-fit: cover;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #E2E8F0;
+  user-select: none;
 }
 
 /* Container Geral */
@@ -797,11 +1024,19 @@ function addOrder() {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .client-name {
+  display: block;
   font-weight: 500;
   color: #334155;
+}
+
+.client-obra {
+  display: block;
+  font-size: 11px;
+  color: #94A3B8;
 }
 
 .status-badge {
@@ -954,6 +1189,14 @@ function addOrder() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.empty-alerts {
+  margin: 0;
+  font-size: 12px;
+  color: #64748B;
+  text-align: center;
+  padding: 12px 0;
 }
 
 .alert-item {
@@ -1174,7 +1417,7 @@ function addOrder() {
   background: #FFFFFF;
   border-radius: 16px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   padding: 24px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
 }
@@ -1200,12 +1443,18 @@ function addOrder() {
   cursor: pointer;
 }
 
+.modal-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .modal-box label {
   display: block;
   font-size: 12px;
   font-weight: 600;
   color: #475569;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .modal-box input {
@@ -1248,6 +1497,11 @@ function addOrder() {
   color: #FFFFFF;
   border-radius: 10px;
   cursor: pointer;
+}
+
+.btn-submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 /* Responsividade */

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
+import { getToken, getUsuario } from '../utils/auth'
 
 type ReportStatusKey = 'execucao' | 'bloqueado' | 'finalizado'
 
@@ -22,63 +23,237 @@ interface ReportItem {
   notes: string
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+const usuarioLogado = getUsuario()
+const nomeUsuario = computed(() => usuarioLogado?.nome || 'Gestor')
+const cargoUsuario = computed(() =>
+  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Operador'
+)
+const iniciaisUsuario = computed(() =>
+  nomeUsuario.value
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase())
+    .join('')
+)
+
 function aoNavegar(menu: string) {
   console.log('Menu selecionado:', menu)
 }
 
-const dateRange = ref<string>('01/05/2024 - 31/05/2024')
+const hoje = new Date()
+const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+const dateRange = ref<string>(
+  `${inicioMes.toLocaleDateString('pt-BR')} - ${hoje.toLocaleDateString('pt-BR')}`
+)
 const selectedProjectFilter = ref<string>('Todos os Projetos')
 const searchReport = ref<string>('')
 const showAdvancedFilters = ref<boolean>(false)
 const minProgressFilter = ref<number>(0)
 const selectedReportModal = ref<ReportItem | null>(null)
-
-const monthlyData: MonthlyProductivity[] = [
-  { month: 'Jan', projetado: 320, realizado: 300 },
-  { month: 'Fev', projetado: 350, realizado: 330 },
-  { month: 'Mar', projetado: 410, realizado: 400 },
-  { month: 'Abr', projetado: 380, realizado: 400 },
-  { month: 'Mai', projetado: 455, realizado: 430 },
-  { month: 'Jun', projetado: 420, realizado: 452 },
-]
+const carregando = ref<boolean>(false)
 
 const hoveredBar = ref<{ month: string; projetado: number; realizado: number } | null>(null)
 
-const reports = ref<ReportItem[]>([
-  {
-    id: 1,
-    project: 'Edifício Ocean Breeze',
-    subtitle: 'Construtora Omega - Apto 402',
-    date: 'Hoje, 14:30',
-    statusKey: 'execucao',
-    statusLabel: 'EM EXECUÇÃO',
-    progress: 75,
-    responsible: 'Carlos Mendes',
-    notes: 'Instalação das esquadrias da fachada norte concluída; aguardando vidros temperados da varanda.',
-  },
-  {
-    id: 2,
-    project: 'Residencial Florada',
-    subtitle: 'Bloco C - Unidade 104',
-    date: 'Ontem, 09:15',
-    statusKey: 'bloqueado',
-    statusLabel: 'BLOQUEADO',
-    progress: 40,
-    responsible: 'Fernanda Souza',
-    notes: 'Embargo técnico temporário por divergência de nível no contramarco da suíte.',
-  },
-  {
-    id: 3,
-    project: 'Marina Lins',
-    subtitle: 'Casa de Campo - Bragança',
-    date: '22 Mai 2024',
-    statusKey: 'finalizado',
-    statusLabel: 'FINALIZADO',
-    progress: 100,
-    responsible: 'Ricardo Almeida',
-    notes: 'Vistoria final aprovada pelo cliente sem pendências de vedação ou acabamento.',
-  },
-])
+const totalProjetosKpi = ref<number>(0)
+const concluidasKpi = ref<number>(0)
+const embargosKpi = ref<number>(0)
+const itensProduzidosKpi = ref<number>(0)
+
+const monthlyData = ref<MonthlyProductivity[]>([])
+const reports = ref<ReportItem[]>([])
+
+function progressoPorEtapa(statusProducao: string): number {
+  switch ((statusProducao || '').toUpperCase()) {
+    case 'AGUARDANDO_MEDICAO':
+      return 20
+    case 'EM_PRODUCAO':
+      return 45
+    case 'LIBERADO':
+      return 70
+    case 'EM_INSTALACAO':
+      return 85
+    case 'CONCLUIDO':
+      return 100
+    default:
+      return 15
+  }
+}
+
+function formatarDataRelativa(iso?: string): string {
+  if (!iso) return 'Recente'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'Recente'
+  return d.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+async function carregarRelatorios() {
+  carregando.value = true
+  try {
+    const headers = { Authorization: `Bearer ${getToken()}` }
+
+    const [resProj, resOrc, resReg, resUsu] = await Promise.all([
+      fetch(`${API_URL}/projeto`, { headers }),
+      fetch(`${API_URL}/orcamento`, { headers }),
+      fetch(`${API_URL}/registroobra`, { headers }),
+      fetch(`${API_URL}/usuario`, { headers }),
+    ])
+
+    const listaProjetos = resProj.ok ? await resProj.json() : []
+    const listaOrcamentos = resOrc.ok ? await resOrc.json() : []
+    const listaRegistros = resReg.ok ? await resReg.json() : []
+    const listaUsuarios = resUsu.ok ? await resUsu.json() : []
+
+    const mapaOrc = new Map<number, any>()
+    for (const o of listaOrcamentos) mapaOrc.set(o.id, o)
+
+    const mapaUsu = new Map<number, string>()
+    for (const u of listaUsuarios) mapaUsu.set(u.id, u.nome)
+
+    // Soma quantidade total de esquadrias dos orçamentos vinculados
+    let totalItens = 0
+    await Promise.all(
+      listaProjetos.map(async (p: any) => {
+        try {
+          const rItens = await fetch(`${API_URL}/orcamento/${p.orcamentoId}/itens`, { headers })
+          if (rItens.ok) {
+            const itens = await rItens.json()
+            totalItens += itens.reduce((acc: number, it: any) => acc + (Number(it.quantidade) || 1), 0)
+          }
+        } catch {
+          // ignora erro pontual de itens
+        }
+      })
+    )
+
+    totalProjetosKpi.value = listaProjetos.length
+    concluidasKpi.value = listaProjetos.filter(
+      (p: any) => (p.statusProducao || '').toUpperCase() === 'CONCLUIDO'
+    ).length
+    embargosKpi.value = listaRegistros.filter((r: any) => !r.resolvido).length
+    itensProduzidosKpi.value = totalItens
+
+    // Monta tabela de Relatórios Recentes a partir dos projetos reais
+    reports.value = listaProjetos
+      .map((p: any) => {
+        const orc = mapaOrc.get(p.orcamentoId)
+        const regsProjeto = listaRegistros
+          .filter((r: any) => r.projetoId === p.id)
+          .sort((a: any, b: any) => b.id - a.id)
+
+        const bloqueado = regsProjeto.some((r: any) => !r.resolvido)
+        const sp = (p.statusProducao || '').toUpperCase()
+
+        let statusKey: ReportStatusKey = 'execucao'
+        let statusLabel = 'EM EXECUÇÃO'
+
+        if (sp === 'CONCLUIDO') {
+          statusKey = 'finalizado'
+          statusLabel = 'FINALIZADO'
+        } else if (bloqueado) {
+          statusKey = 'bloqueado'
+          statusLabel = 'BLOQUEADO'
+        }
+
+        const ultimoRegistro = regsProjeto[0]
+        const ano = (p.dataInicioContrato || '2026').slice(0, 4)
+
+        return {
+          id: p.id,
+          project: orc?.nomeCliente || `Projeto #${p.id}`,
+          subtitle: `${orc?.enderecoObra || 'Obra'} • #ESQ-${ano}-${String(p.id).padStart(3, '0')}`,
+          date: formatarDataRelativa(ultimoRegistro?.dataRegistro || p.dataMedicaoFinal || p.dataInicioContrato),
+          statusKey,
+          statusLabel,
+          progress: progressoPorEtapa(p.statusProducao),
+          responsible: mapaUsu.get(p.tecnicoId) || 'Não atribuído',
+          notes:
+            ultimoRegistro?.descricao ||
+            `Projeto na etapa ${sp.replace('_', ' ')} sem ocorrências impeditivas registradas.`,
+        }
+      })
+      .sort((a: ReportItem, b: ReportItem) => b.id - a.id)
+
+    // Monta série dos últimos 6 meses para o gráfico de barras
+    const nomesMeses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+    const mesesSerie: MonthlyProductivity[] = []
+
+    for (let i = 5; i >= 0; i--) {
+      const refDate = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1)
+      const mesIdx = refDate.getMonth()
+      const anoRef = refDate.getFullYear()
+
+      const projMes = listaProjetos.filter((p: any) => {
+        const dt = new Date(p.dataInicioContrato)
+        return !Number.isNaN(dt.getTime()) && dt.getMonth() === mesIdx && dt.getFullYear() === anoRef
+      })
+
+      const concluidosMes = projMes.filter(
+        (p: any) => (p.statusProducao || '').toUpperCase() === 'CONCLUIDO'
+      )
+
+      mesesSerie.push({
+        month: nomesMeses[mesIdx]!,
+        projetado: projMes.length * 10,
+        realizado: concluidosMes.length * 10,
+      })
+    }
+
+    monthlyData.value = mesesSerie
+  } catch (err) {
+    console.error('Erro ao carregar dados da Central de Relatórios:', err)
+  } finally {
+    carregando.value = false
+  }
+}
+
+/* ---------- Gráfico Donut Dinâmico ---------- */
+const donutStats = computed(() => {
+  const total = reports.value.length || 1
+  const circunferencia = 415
+
+  const qtdConcluido = reports.value.filter((r) => r.statusKey === 'finalizado').length
+  const qtdBloqueado = reports.value.filter((r) => r.statusKey === 'bloqueado').length
+  const qtdPendente = Math.max(0, reports.value.length - qtdConcluido - qtdBloqueado)
+
+  const lenConcluido = Math.round((qtdConcluido / total) * circunferencia)
+  const lenBloqueado = Math.round((qtdBloqueado / total) * circunferencia)
+  const lenPendente = Math.max(0, circunferencia - lenConcluido - lenBloqueado)
+
+  return {
+    concluido: { len: lenConcluido, offset: 0, count: qtdConcluido },
+    bloqueado: { len: lenBloqueado, offset: -lenConcluido, count: qtdBloqueado },
+    pendente: { len: lenPendente, offset: -(lenConcluido + lenBloqueado), count: qtdPendente },
+  }
+})
+
+const maxChartValue = computed(() => {
+  const maior = Math.max(
+    40,
+    ...monthlyData.value.flatMap((m) => [m.projetado, m.realizado])
+  )
+  return Math.ceil(maior / 10) * 10
+})
+
+const yTicks = computed(() => {
+  const step = Math.round(maxChartValue.value / 4)
+  return [maxChartValue.value, step * 3, step * 2, step, 0]
+})
+
+function barHeight(value: number): number {
+  const chartHeight = 190
+  return Math.round((value / maxChartValue.value) * chartHeight)
+}
+
+function barY(value: number): number {
+  const baselineY = 210
+  return baselineY - barHeight(value)
+}
 
 const filteredReports = computed<ReportItem[]>(() => {
   return reports.value.filter((item) => {
@@ -99,20 +274,13 @@ const filteredReports = computed<ReportItem[]>(() => {
   })
 })
 
-function barHeight(value: number): number {
-  const maxVal = 480
-  const chartHeight = 190
-  return Math.round((value / maxVal) * chartHeight)
-}
-
-function barY(value: number): number {
-  const baselineY = 210
-  return baselineY - barHeight(value)
-}
-
 function exportarPdf() {
   window.print()
 }
+
+onMounted(() => {
+  carregarRelatorios()
+})
 </script>
 
 <template>
@@ -120,7 +288,7 @@ function exportarPdf() {
     <Sidebar @navigate="aoNavegar" />
 
     <main class="main-area">
-      <!-- Topbar -->
+      <!-- Topbar (padrão Home com usuário logado) -->
       <header class="topbar">
         <div class="topbar-inner">
           <div class="topbar-title-group">
@@ -129,23 +297,33 @@ function exportarPdf() {
           </div>
 
           <div class="topbar-actions">
-            <button type="button" class="icon-btn" aria-label="Notificações">
+            <button
+              type="button"
+              class="icon-btn"
+              aria-label="Atualizar dados"
+              title="Atualizar relatórios"
+              @click="carregarRelatorios"
+            >
               <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
-              <span class="notif-dot"></span>
+              <span v-if="embargosKpi > 0" class="notif-dot"></span>
             </button>
+
+            <button type="button" class="icon-btn" aria-label="Calendário">
+              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </button>
+
+            <div class="divider"></div>
 
             <div class="user-profile">
               <div class="user-info">
-                <p class="user-name">Ricardo Almeida</p>
-                <p class="user-role">Gestor de Produção</p>
+                <p class="user-name">{{ nomeUsuario }}</p>
+                <p class="user-role">{{ cargoUsuario }}</p>
               </div>
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
-                alt="Ricardo Almeida"
-                class="user-avatar"
-              />
+              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
             </div>
           </div>
         </div>
@@ -214,7 +392,6 @@ function exportarPdf() {
 
         <!-- Linha 1: 4 Cards de KPI -->
         <section class="kpi-grid">
-          <!-- Total de Projetos -->
           <div class="card kpi-card">
             <div class="kpi-top">
               <div class="kpi-icon blue">
@@ -222,13 +399,12 @@ function exportarPdf() {
                   <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
                 </svg>
               </div>
-              <span class="pill green">+12%</span>
+              <span class="pill green">Ativos</span>
             </div>
             <p class="kpi-label">TOTAL DE PROJETOS</p>
-            <p class="kpi-value">128</p>
+            <p class="kpi-value">{{ totalProjetosKpi }}</p>
           </div>
 
-          <!-- Instalações Concluídas -->
           <div class="card kpi-card">
             <div class="kpi-top">
               <div class="kpi-icon emerald">
@@ -236,13 +412,12 @@ function exportarPdf() {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <span class="pill green">Meta 95%</span>
+              <span class="pill green">Entregues</span>
             </div>
             <p class="kpi-label">INSTALAÇÕES CONCLUÍDAS</p>
-            <p class="kpi-value">84</p>
+            <p class="kpi-value">{{ concluidasKpi }}</p>
           </div>
 
-          <!-- Embargos Ativos -->
           <div class="card kpi-card">
             <div class="kpi-top">
               <div class="kpi-icon amber">
@@ -250,13 +425,12 @@ function exportarPdf() {
                   <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
                 </svg>
               </div>
-              <span class="pill red">+5 pend.</span>
+              <span class="pill red">{{ embargosKpi }} pend.</span>
             </div>
             <p class="kpi-label">EMBARGOS ATIVOS</p>
-            <p class="kpi-value">14</p>
+            <p class="kpi-value">{{ embargosKpi }}</p>
           </div>
 
-          <!-- Produção Mensal -->
           <div class="card kpi-card">
             <div class="kpi-top">
               <div class="kpi-icon indigo">
@@ -264,19 +438,19 @@ function exportarPdf() {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
                 </svg>
               </div>
-              <span class="pill blue">Eficiência</span>
+              <span class="pill blue">Esquadrias</span>
             </div>
-            <p class="kpi-label">PRODUÇÃO MENSAL</p>
-            <p class="kpi-value">452 itens</p>
+            <p class="kpi-label">VOLUME DE PRODUÇÃO</p>
+            <p class="kpi-value">{{ itensProduzidosKpi }} itens</p>
           </div>
         </section>
 
         <!-- Linha 2: Gráficos -->
         <section class="charts-grid">
-          <!-- Gráfico de Barras: Produtividade Mensal (Itens) -->
+          <!-- Gráfico de Barras: Produtividade Mensal -->
           <div class="card chart-card">
             <div class="chart-header">
-              <h2 class="section-title">Produtividade Mensal (Itens)</h2>
+              <h2 class="section-title">Produtividade Mensal (Índice de Projetos)</h2>
 
               <div class="bar-legend">
                 <span class="legend-item">
@@ -296,8 +470,7 @@ function exportarPdf() {
               </div>
 
               <svg viewBox="0 0 640 245" class="bar-svg" role="img" aria-label="Gráfico de Produtividade Mensal">
-                <!-- Linhas de Grade Horizontais + Eixo Y -->
-                <g v-for="tick in [400, 300, 200, 100, 0]" :key="tick">
+                <g v-for="tick in yTicks" :key="tick">
                   <text
                     x="34"
                     :y="barY(tick) + 4"
@@ -318,7 +491,6 @@ function exportarPdf() {
                   />
                 </g>
 
-                <!-- Grupos de Barras por Mês -->
                 <g
                   v-for="(item, index) in monthlyData"
                   :key="item.month"
@@ -327,25 +499,22 @@ function exportarPdf() {
                   @mouseenter="hoveredBar = item"
                   @mouseleave="hoveredBar = null"
                 >
-                  <!-- Barra Projetado -->
                   <rect
                     x="0"
                     :y="barY(item.projetado)"
                     width="34"
-                    :height="barHeight(item.projetado)"
+                    :height="Math.max(4, barHeight(item.projetado))"
                     rx="3"
                     fill="#1E3A8A"
                   />
-                  <!-- Barra Realizado -->
                   <rect
                     x="36"
                     :y="barY(item.realizado)"
                     width="34"
-                    :height="barHeight(item.realizado)"
+                    :height="Math.max(4, barHeight(item.realizado))"
                     rx="3"
                     fill="#8CC5FC"
                   />
-                  <!-- Rótulo do Mês -->
                   <text
                     x="35"
                     y="232"
@@ -369,31 +538,15 @@ function exportarPdf() {
 
             <div class="donut-body">
               <svg viewBox="0 0 200 200" class="donut-svg" role="img" aria-label="Status de Instalação">
-                <!-- Pendente (Laranja ~21%) -->
                 <circle
                   cx="100"
                   cy="100"
                   r="66"
                   fill="none"
-                  stroke="#F59E0B"
+                  stroke="#F1F5F9"
                   stroke-width="26"
-                  stroke-dasharray="87 415"
-                  stroke-dashoffset="-253"
-                  transform="rotate(-90 100 100)"
                 />
-                <!-- Bloqueado (Vermelho ~15%) -->
-                <circle
-                  cx="100"
-                  cy="100"
-                  r="66"
-                  fill="none"
-                  stroke="#EF4444"
-                  stroke-width="26"
-                  stroke-dasharray="62 415"
-                  stroke-dashoffset="-191"
-                  transform="rotate(-90 100 100)"
-                />
-                <!-- Concluído (Verde ~64%) -->
+                <!-- Concluído -->
                 <circle
                   cx="100"
                   cy="100"
@@ -401,8 +554,32 @@ function exportarPdf() {
                   fill="none"
                   stroke="#10B981"
                   stroke-width="26"
-                  stroke-dasharray="266 415"
-                  stroke-dashoffset="75"
+                  :stroke-dasharray="`${donutStats.concluido.len} 415`"
+                  :stroke-dashoffset="donutStats.concluido.offset"
+                  transform="rotate(-90 100 100)"
+                />
+                <!-- Bloqueado -->
+                <circle
+                  cx="100"
+                  cy="100"
+                  r="66"
+                  fill="none"
+                  stroke="#EF4444"
+                  stroke-width="26"
+                  :stroke-dasharray="`${donutStats.bloqueado.len} 415`"
+                  :stroke-dashoffset="donutStats.bloqueado.offset"
+                  transform="rotate(-90 100 100)"
+                />
+                <!-- Pendente / Execução -->
+                <circle
+                  cx="100"
+                  cy="100"
+                  r="66"
+                  fill="none"
+                  stroke="#F59E0B"
+                  stroke-width="26"
+                  :stroke-dasharray="`${donutStats.pendente.len} 415`"
+                  :stroke-dashoffset="donutStats.pendente.offset"
                   transform="rotate(-90 100 100)"
                 />
               </svg>
@@ -411,17 +588,17 @@ function exportarPdf() {
                 <div class="legend-row">
                   <span class="legend-item">
                     <i class="legend-box green"></i>
-                    Concluído
+                    Concluído ({{ donutStats.concluido.count }})
                   </span>
                   <span class="legend-item">
                     <i class="legend-box amber"></i>
-                    Pendente
+                    Pendente ({{ donutStats.pendente.count }})
                   </span>
                 </div>
                 <div class="legend-row">
                   <span class="legend-item">
                     <i class="legend-box red"></i>
-                    Bloqueado
+                    Bloqueado ({{ donutStats.bloqueado.count }})
                   </span>
                 </div>
               </div>
@@ -457,7 +634,13 @@ function exportarPdf() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="report in filteredReports" :key="report.id">
+                <tr v-if="carregando">
+                  <td colspan="5" class="empty-row">
+                    Carregando relatórios da API...
+                  </td>
+                </tr>
+
+                <tr v-else v-for="report in filteredReports" :key="report.id">
                   <td>
                     <div class="project-cell">
                       <span class="project-name">{{ report.project }}</span>
@@ -496,7 +679,7 @@ function exportarPdf() {
                   </td>
                 </tr>
 
-                <tr v-if="filteredReports.length === 0">
+                <tr v-if="!carregando && filteredReports.length === 0">
                   <td colspan="5" class="empty-row">
                     Nenhum relatório encontrado para os filtros aplicados.
                   </td>
@@ -607,7 +790,7 @@ function exportarPdf() {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
 
 .icon-btn {
@@ -638,6 +821,12 @@ function exportarPdf() {
   border: 2px solid #FFFFFF;
 }
 
+.divider {
+  width: 1px;
+  height: 28px;
+  background: #E2E8F0;
+}
+
 .user-profile {
   display: flex;
   align-items: center;
@@ -661,11 +850,17 @@ function exportarPdf() {
   color: #64748B;
 }
 
-.user-avatar {
+.user-avatar-initials {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  object-fit: cover;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #E2E8F0;
 }
 
@@ -1011,13 +1206,13 @@ function exportarPdf() {
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  max-width: 210px;
+  max-width: 240px;
 }
 
 .legend-row {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 18px;
 }
 
 /* Tabela Relatórios Recentes */

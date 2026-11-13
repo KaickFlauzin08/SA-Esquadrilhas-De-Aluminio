@@ -1,166 +1,277 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
+import { getToken, getUsuario } from '../utils/auth'
 
 type ProjectBadge = 'SELECIONADO' | 'URGENTE'
 type ItemIconType = 'door' | 'window'
 
-interface Collaborator {
-  id: string
-  name: string
-  avatar: string
+interface TeamMember {
+  usuarioId: number
+  nome: string
+  funcaoNaEquipe: string
+}
+
+interface TeamGroup {
+  id: number
+  nome: string
+  especialidade: string
   available: boolean
   statusText: string
+  membros: TeamMember[]
+}
+
+interface TechnicianOption {
+  id: number
+  nome: string
 }
 
 interface ProjectItem {
   id: string
+  rawItemId: number
   title: string
   subtitle: string
   iconType: ItemIconType
-  assigned: Collaborator[]
+  assigned: TeamGroup[]
 }
 
 interface OpenProject {
   id: string
+  rawId: number
+  orcamentoId: number
+  tecnicoId: number | null
   client: string
   workplace: string
   itemsCountLabel: string
   updatedAt: string
   badge?: ProjectBadge
   totalSlots: number
-  baseAssignedCount: number
   items: ProjectItem[]
 }
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+const usuarioLogado = getUsuario()
+const nomeUsuario = computed(() => usuarioLogado?.nome || 'Gestor')
+const cargoUsuario = computed(() =>
+  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Operador'
+)
+const iniciaisUsuario = computed(() =>
+  nomeUsuario.value
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase())
+    .join('')
+)
 
 function aoNavegar(menu: string) {
   console.log('Menu selecionado:', menu)
 }
 
 const searchWork = ref<string>('')
-const searchCollaborator = ref<string>('')
-const selectedProjectId = ref<string>('#ORD-8915')
-const selectedItemId = ref<string>('item-1')
+const searchTeam = ref<string>('')
+const selectedProjectId = ref<string>('')
+const selectedItemId = ref<string>('')
 const dragOverItemId = ref<string | null>(null)
-const draggedCollaborator = ref<Collaborator | null>(null)
+const draggedTeam = ref<TeamGroup | null>(null)
 const feedbackMessage = ref<string | null>(null)
+const carregando = ref<boolean>(false)
+const salvando = ref<boolean>(false)
 
-const collaborators = ref<Collaborator[]>([
-  {
-    id: 'col-1',
-    name: 'Pedro Santos',
-    avatar:
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&q=80',
-    available: true,
-    statusText: 'Disponível',
-  },
-  {
-    id: 'col-2',
-    name: 'João Paulo',
-    avatar:
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80',
-    available: false,
-    statusText: 'Em Rota (Vila Nova)',
-  },
-  {
-    id: 'col-3',
-    name: 'Carlos Mendes',
-    avatar:
-      'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=100&q=80',
-    available: true,
-    statusText: 'Disponível',
-  },
-])
+// Estados do Modal de Criar Nova Equipe
+const showCreateTeamModal = ref<boolean>(false)
+const novoNomeEquipe = ref<string>('')
+const novaEspecialidade = ref<string>('Instalação Geral')
+const tecnicosSelecionados = ref<number[]>([])
+const liderSelecionado = ref<number | null>(null)
+const criandoEquipe = ref<boolean>(false)
 
-function createInitialProjects(): OpenProject[] {
-  return [
-    {
-      id: '#ORD-8915',
-      client: 'Construtora Omega',
-      workplace: 'Edifício Ocean Breeze - Apto 402',
-      itemsCountLabel: '08 Itens',
-      updatedAt: 'Há 2h',
-      badge: 'SELECIONADO',
-      totalSlots: 8,
-      baseAssignedCount: 1,
-      items: [
-        {
-          id: 'item-1',
-          title: 'Porta de Entrada Principal',
-          subtitle: 'Linha Gold • Alumínio Preto',
-          iconType: 'door',
-          assigned: [
-            {
-              id: 'col-joaquim',
-              name: 'Joaquim Azevedo',
-              avatar:
-                'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=100&q=80',
-              available: true,
-              statusText: 'Disponível',
-            },
-            {
-              id: 'col-mario',
-              name: 'Mario Silva',
-              avatar:
-                'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=100&q=80',
-              available: true,
-              statusText: 'Disponível',
-            },
-          ],
-        },
-        {
-          id: 'item-2',
-          title: 'Janela Quarto Suíte (J01)',
-          subtitle: 'Veneziana Integrada Motorizada',
-          iconType: 'window',
-          assigned: [],
-        },
-      ],
-    },
-    {
-      id: '#ORD-8890',
-      client: 'Residencial Florada',
-      workplace: 'Bloco C - Unidade 104',
-      itemsCountLabel: '14 Itens',
-      updatedAt: 'Há 5h',
-      badge: 'URGENTE',
-      totalSlots: 14,
-      baseAssignedCount: 4,
-      items: [
-        {
-          id: 'item-201',
-          title: 'Porta Balcão Varanda Gourmet',
-          subtitle: 'Linha Suprema • 4 Folhas de Correr',
-          iconType: 'door',
-          assigned: [
-            {
-              id: 'col-joaquim',
-              name: 'Joaquim Azevedo',
-              avatar:
-                'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=100&q=80',
-              available: true,
-              statusText: 'Disponível',
-            },
-          ],
-        },
-        {
-          id: 'item-202',
-          title: 'Maxim-Ar Banheiro Social',
-          subtitle: 'Vidro Mini Boreal 4mm',
-          iconType: 'window',
-          assigned: [],
-        },
-      ],
-    },
-  ]
+const allTechnicians = ref<TechnicianOption[]>([])
+const teams = ref<TeamGroup[]>([])
+const projects = ref<OpenProject[]>([])
+
+function tempoRelativo(iso?: string): string {
+  if (!iso) return 'Recente'
+  const diffMs = Date.now() - new Date(iso).getTime()
+  const horas = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60)))
+  if (horas < 24) return `Há ${horas}h`
+  return `Há ${Math.floor(horas / 24)}d`
 }
 
-const projects = ref<OpenProject[]>(createInitialProjects())
+function mapearIcone(descricao: string): ItemIconType {
+  const d = (descricao || '').toLowerCase()
+  if (d.includes('porta') || d.includes('pivotante') || d.includes('balcão')) return 'door'
+  return 'window'
+}
 
-const filteredProjects = computed<OpenProject[]>(() => {
+async function carregarDados() {
+  carregando.value = true
+  try {
+    const headers = { Authorization: `Bearer ${getToken()}` }
+
+const [resProj, resOrc, resUsu, resEquipe, resReg] = await Promise.all([
+  fetch(`${API_URL}/projeto`, { headers }),
+  fetch(`${API_URL}/orcamento`, { headers }),
+  fetch(`${API_URL}/user`, { headers }),
+  fetch(`${API_URL}/equipe`, { headers }),
+  fetch(`${API_URL}/registroobra`, { headers }),
+])
+
+    const listaProjetos = resProj.ok ? await resProj.json() : []
+    const listaOrcamentos = resOrc.ok ? await resOrc.json() : []
+    const listaUsuarios = resUsu.ok ? await resUsu.json() : []
+    const listaEquipes = resEquipe.ok ? await resEquipe.json() : []
+    const listaRegistros = resReg.ok ? await resReg.json() : []
+
+    const mapaOrc = new Map<number, any>()
+    for (const o of listaOrcamentos) mapaOrc.set(o.id, o)
+
+const tecnicos = listaUsuarios.filter(
+  (u: any) => u.ativo !== false && (u.perfil || '').toUpperCase() !== 'GESTOR'
+)
+
+    // Verifica quais técnicos já estão em projetos ativos
+    const tecnicosOcupados = new Set<number>()
+    for (const p of listaProjetos) {
+      if (p.tecnicoId && (p.statusProducao || '').toUpperCase() !== 'CONCLUIDO') {
+        tecnicosOcupados.add(p.tecnicoId)
+      }
+    }
+
+    // Mapeia as equipes vindas do novo EquipeController
+    teams.value = listaEquipes.map((eq: any) => {
+      const membros: TeamMember[] = eq.membros || []
+      const algumOcupado = membros.some((m) => tecnicosOcupados.has(m.usuarioId))
+      return {
+        id: eq.id,
+        nome: eq.nome,
+        especialidade: eq.especialidade || 'Instalação',
+        available: !algumOcupado,
+        statusText: algumOcupado
+          ? `Em Obra (${membros.length} técnicos)`
+          : `Disponível • ${membros.length} técnico(s)`,
+        membros,
+      }
+    })
+
+    // Monta os projetos em aberto
+    const projetosAbertos = listaProjetos.filter(
+      (p: any) => (p.statusProducao || '').toUpperCase() !== 'CONCLUIDO'
+    )
+
+    const montados: OpenProject[] = await Promise.all(
+      projetosAbertos.map(async (p: any) => {
+        const orc = mapaOrc.get(p.orcamentoId)
+        const regsProjeto = listaRegistros.filter((r: any) => r.projetoId === p.id)
+        const temPendencia = regsProjeto.some((r: any) => !r.resolvido)
+
+        let itensApi: any[] = []
+        try {
+          const rItens = await fetch(`${API_URL}/orcamento/${p.orcamentoId}/itens`, { headers })
+          if (rItens.ok) itensApi = await rItens.json()
+        } catch {
+          itensApi = []
+        }
+
+        // Se o projeto já tem um técnico vinculado, encontra a equipe dele
+        const equipeVinculada = p.tecnicoId
+          ? teams.value.find((t) => t.membros.some((m) => m.usuarioId === p.tecnicoId))
+          : undefined
+
+        const items: ProjectItem[] = itensApi.map((it: any) => ({
+          id: `item-${it.id}`,
+          rawItemId: it.id,
+          title: `${it.descricaoItem || 'Esquadria'} (${it.quantidade}x)`,
+          subtitle: `${it.tipoAbertura || 'Esquadria'} • ${it.largura}x${it.altura}mm`,
+          iconType: mapearIcone(it.descricaoItem),
+          assigned: equipeVinculada ? [{ ...equipeVinculada }] : [],
+        }))
+
+        const ano = (p.dataInicioContrato || '2026').slice(0, 4)
+        return {
+          id: `#ORD-${ano}-${String(p.id).padStart(3, '0')}`,
+          rawId: p.id,
+          orcamentoId: p.orcamentoId,
+          tecnicoId: p.tecnicoId ?? null,
+          client: orc?.nomeCliente || `Cliente #${p.orcamentoId}`,
+          workplace: orc?.enderecoObra || `Obra Orçamento #${p.orcamentoId}`,
+          itemsCountLabel: `${String(items.length).padStart(2, '0')} Itens`,
+          updatedAt: tempoRelativo(p.dataMedicaoFinal || p.dataInicioContrato),
+          badge: temPendencia ? 'URGENTE' : undefined,
+          totalSlots: Math.max(1, items.length),
+          items,
+        }
+      })
+    )
+
+    projects.value = montados
+    if (montados.length > 0 && !montados.some((m) => m.id === selectedProjectId.value)) {
+      selectedProjectId.value = montados[0]!.id
+      selectedItemId.value = montados[0]!.items[0]?.id ?? ''
+    }
+  } catch (err) {
+    console.error('Erro ao carregar dados:', err)
+    exibirFeedback('Erro ao conectar com a API.')
+  } finally {
+    carregando.value = false
+  }
+}
+
+function toggleTecnicoModal(id: number) {
+  const idx = tecnicosSelecionados.value.indexOf(id)
+  if (idx >= 0) {
+    tecnicosSelecionados.value.splice(idx, 1)
+    if (liderSelecionado.value === id) {
+      liderSelecionado.value = tecnicosSelecionados.value[0] ?? null
+    }
+  } else {
+    tecnicosSelecionados.value.push(id)
+    if (!liderSelecionado.value) liderSelecionado.value = id
+  }
+}
+
+async function salvarNovaEquipe() {
+  if (!novoNomeEquipe.value.trim() || tecnicosSelecionados.value.length === 0 || criandoEquipe.value) {
+    return
+  }
+
+  criandoEquipe.value = true
+  try {
+    const res = await fetch(`${API_URL}/equipe/cadastrar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({
+        nome: novoNomeEquipe.value.trim(),
+        especialidade: novaEspecialidade.value.trim(),
+        liderId: liderSelecionado.value,
+        tecnicosIds: tecnicosSelecionados.value,
+      }),
+    })
+
+    if (!res.ok) throw new Error('Erro ao cadastrar equipe')
+
+    novoNomeEquipe.value = ''
+    novaEspecialidade.value = 'Instalação Geral'
+    tecnicosSelecionados.value = []
+    liderSelecionado.value = null
+    showCreateTeamModal.value = false
+
+    await carregarDados()
+    exibirFeedback('Nova equipe criada e pronta para alocação!')
+  } catch (err) {
+    console.error(err)
+    exibirFeedback('Não foi possível criar a equipe.')
+  } finally {
+    criandoEquipe.value = false
+  }
+}
+
+const filteredProjects = computed(() => {
   const q = searchWork.value.trim().toLowerCase()
   if (!q) return projects.value
-
   return projects.value.filter(
     (p) =>
       p.id.toLowerCase().includes(q) ||
@@ -169,37 +280,29 @@ const filteredProjects = computed<OpenProject[]>(() => {
   )
 })
 
-const filteredCollaborators = computed<Collaborator[]>(() => {
-  const q = searchCollaborator.value.trim().toLowerCase()
-  if (!q) return collaborators.value
-
-  return collaborators.value.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      c.statusText.toLowerCase().includes(q)
+const filteredTeams = computed(() => {
+  const q = searchTeam.value.trim().toLowerCase()
+  if (!q) return teams.value
+  return teams.value.filter(
+    (t) =>
+      t.nome.toLowerCase().includes(q) ||
+      t.especialidade.toLowerCase().includes(q) ||
+      t.membros.some((m) => m.nome.toLowerCase().includes(q))
   )
 })
 
-const activeProject = computed<OpenProject>(() => {
-  return (
-    projects.value.find((p) => p.id === selectedProjectId.value) ??
-    projects.value[0]!
-  )
+const activeProject = computed(() => {
+  if (projects.value.length === 0) return null
+  return projects.value.find((p) => p.id === selectedProjectId.value) ?? projects.value[0]!
 })
 
-const assignedTotal = computed<number>(() => {
-  const visibleAssigned = activeProject.value.items.reduce(
-    (sum, item) => sum + item.assigned.length,
-    0
-  )
-  return Math.min(
-    activeProject.value.totalSlots,
-    activeProject.value.baseAssignedCount + visibleAssigned
-  )
+const assignedTotal = computed(() => {
+  if (!activeProject.value) return 0
+  return activeProject.value.items.filter((item) => item.assigned.length > 0).length
 })
 
-const assignedProgressPercent = computed<number>(() => {
-  if (activeProject.value.totalSlots === 0) return 0
+const assignedProgressPercent = computed(() => {
+  if (!activeProject.value || activeProject.value.totalSlots === 0) return 0
   return Math.round((assignedTotal.value / activeProject.value.totalSlots) * 100)
 })
 
@@ -209,82 +312,116 @@ function selecionarProjeto(project: OpenProject) {
   feedbackMessage.value = null
 }
 
-function aoIniciarArrasto(event: DragEvent, collaborator: Collaborator) {
-  if (!collaborator.available) {
-    event.preventDefault()
-    return
-  }
-  draggedCollaborator.value = collaborator
+function aoIniciarArrasto(event: DragEvent, team: TeamGroup) {
+  draggedTeam.value = team
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copy'
-    event.dataTransfer.setData('text/plain', collaborator.id)
+    event.dataTransfer.setData('text/plain', String(team.id))
   }
 }
 
 function aoSoltarNoItem(item: ProjectItem) {
   dragOverItemId.value = null
-  const col = draggedCollaborator.value
-  if (!col || !col.available) return
-
-  alocarColaboradorNoItem(item, col)
-  draggedCollaborator.value = null
+  if (!draggedTeam.value) return
+  alocarEquipeNoItem(item, draggedTeam.value)
+  draggedTeam.value = null
 }
 
-function alocarColaboradorNoItem(item: ProjectItem, collaborator: Collaborator) {
-  const alreadyAssigned = item.assigned.some((a) => a.id === collaborator.id)
-  if (alreadyAssigned) return
-
-  item.assigned.push({ ...collaborator })
+function alocarEquipeNoItem(item: ProjectItem, team: TeamGroup) {
+  if (item.assigned.some((a) => a.id === team.id)) return
+  item.assigned.push({ ...team })
   selectedItemId.value = item.id
 }
 
-function alocarPorClique(collaborator: Collaborator) {
-  if (!collaborator.available) return
-  const targetItem =
+function alocarPorClique(team: TeamGroup) {
+  if (!activeProject.value) return
+  const target =
     activeProject.value.items.find((i) => i.id === selectedItemId.value) ??
     activeProject.value.items[0]
-
-  if (targetItem) {
-    alocarColaboradorNoItem(targetItem, collaborator)
-  }
+  if (target) alocarEquipeNoItem(target, team)
 }
 
-function removerColaborador(item: ProjectItem, collaboratorId: string) {
-  item.assigned = item.assigned.filter((a) => a.id !== collaboratorId)
+function removerEquipeDoItem(item: ProjectItem, teamId: number) {
+  item.assigned = item.assigned.filter((a) => a.id !== teamId)
 }
 
 function selecionarTodosItens() {
-  const firstAvailable = collaborators.value.find((c) => c.available)
-  if (!firstAvailable) return
-
+  if (!activeProject.value || teams.value.length === 0) return
+  const equipePreferida = teams.value.find((t) => t.available) ?? teams.value[0]!
   activeProject.value.items.forEach((item) => {
     if (item.assigned.length === 0) {
-      item.assigned.push({ ...firstAvailable })
+      item.assigned.push({ ...equipePreferida })
     }
   })
 }
 
-function descartarAlteracoes() {
-  const fresh = createInitialProjects()
-  const original = fresh.find((p) => p.id === activeProject.value.id)
-  if (original) {
-    activeProject.value.items = original.items
-  }
-  exibirFeedback('Alterações descartadas para a obra ' + activeProject.value.id + '.')
-}
+async function confirmarAlocacao() {
+  if (!activeProject.value || salvando.value) return
+  salvando.value = true
 
-function confirmarAlocacao() {
-  exibirFeedback(
-    `Alocação confirmada! OS ${activeProject.value.id} sincronizada com o mobile.`
-  )
+  const proj = activeProject.value
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${getToken()}`,
+  }
+
+  try {
+    const primeiraEquipe = proj.items.flatMap((i) => i.assigned)[0]
+    const liderOuPrimeiroMembro =
+      primeiraEquipe?.membros.find((m) => m.funcaoNaEquipe === 'Líder') ??
+      primeiraEquipe?.membros[0]
+
+    // Vincula o líder da equipe ao Projeto
+    await fetch(`${API_URL}/projeto/${proj.rawId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        tecnicoId: liderOuPrimeiroMembro ? liderOuPrimeiroMembro.usuarioId : null,
+      }),
+    })
+
+    // Registra no histórico da obra quais equipes/técnicos foram designados
+    const resumo = proj.items
+      .map((it) => {
+        const eqNomes = it.assigned.map((e) => `${e.nome} (${e.membros.map((m) => m.nome).join(', ')})`).join('; ')
+        return `${it.title}: ${eqNomes || 'Pendente'}`
+      })
+      .join(' | ')
+
+    await fetch(`${API_URL}/registroobra/cadastrar`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        projetoId: proj.rawId,
+        usuarioId: usuarioLogado?.id || 1,
+        etapaProcesso: 'DESIGNACAO_EQUIPE',
+        tipoOcorrencia: 'NENHUMA',
+        descricao: `Equipes designadas para ${proj.id} -> ${resumo}`,
+        fotoUrl: '',
+        resolvido: true,
+      }),
+    })
+
+    await carregarDados()
+    exibirFeedback(`Alocação confirmada! OS ${proj.id} enviada para a equipe.`)
+  } catch (err) {
+    console.error(err)
+    exibirFeedback('Erro ao salvar alocação.')
+  } finally {
+    salvando.value = false
+  }
 }
 
 function exibirFeedback(msg: string) {
   feedbackMessage.value = msg
   setTimeout(() => {
     feedbackMessage.value = null
-  }, 3200)
+  }, 3500)
 }
+
+onMounted(() => {
+  carregarDados()
+})
 </script>
 
 <template>
@@ -301,22 +438,22 @@ function exibirFeedback(msg: string) {
           </div>
 
           <div class="topbar-actions">
-            <button type="button" class="icon-btn" aria-label="Notificações">
-              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
+            <button
+              type="button"
+              class="btn-new-team"
+              @click="showCreateTeamModal = true"
+            >
+              + Nova Equipe
             </button>
+
+            <div class="divider"></div>
 
             <div class="user-profile">
               <div class="user-info">
-                <p class="user-name">Ricardo Almeida</p>
-                <p class="user-role">Gestor de Produção</p>
+                <p class="user-name">{{ nomeUsuario }}</p>
+                <p class="user-role">{{ cargoUsuario }}</p>
               </div>
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80"
-                alt="Ricardo Almeida"
-                class="user-avatar"
-              />
+              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
             </div>
           </div>
         </div>
@@ -332,32 +469,32 @@ function exibirFeedback(msg: string) {
                 <h2 class="panel-title">Projetos em Aberto</h2>
                 <p class="panel-subtitle">Aguardando designação de equipe</p>
               </div>
-              <span class="works-count-pill">08 Obras</span>
+              <span class="works-count-pill">
+                {{ String(projects.length).padStart(2, '0') }} Obras
+              </span>
             </div>
 
             <div class="search-box">
               <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
-              <input
-                v-model="searchWork"
-                type="text"
-                placeholder="Filtrar por obra..."
-              />
+              <input v-model="searchWork" type="text" placeholder="Filtrar por obra..." />
             </div>
 
             <div class="projects-list">
+              <p v-if="carregando" class="empty-msg">Carregando obras...</p>
+
               <div
+                v-else
                 v-for="project in filteredProjects"
                 :key="project.id"
-                :class="['project-card', { selected: project.id === activeProject.id }]"
+                :class="['project-card', { selected: activeProject && project.id === activeProject.id }]"
                 @click="selecionarProjeto(project)"
               >
                 <div class="project-card-top">
                   <span class="project-code">{{ project.id }}</span>
-
                   <span
-                    v-if="project.id === activeProject.id"
+                    v-if="activeProject && project.id === activeProject.id"
                     class="project-badge badge-selected"
                   >
                     SELECIONADO
@@ -374,27 +511,15 @@ function exibirFeedback(msg: string) {
                 <p class="project-workplace">{{ project.workplace }}</p>
 
                 <div class="project-card-footer">
-                  <span class="meta-item">
-                    <svg width="13" height="13" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
-                    </svg>
-                    {{ project.itemsCountLabel }}
-                  </span>
-
-                  <span class="meta-item">
-                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    {{ project.updatedAt }}
-                  </span>
+                  <span class="meta-item">{{ project.itemsCountLabel }}</span>
+                  <span class="meta-item">{{ project.updatedAt }}</span>
                 </div>
               </div>
             </div>
           </aside>
 
           <!-- COLUNA DIREITA: Painel de Alocação -->
-          <section class="card allocation-panel">
-            <!-- Cabeçalho do Painel de Alocação -->
+          <section v-if="activeProject" class="card allocation-panel">
             <div class="allocation-header">
               <div>
                 <div class="allocation-title-row">
@@ -402,21 +527,15 @@ function exibirFeedback(msg: string) {
                   <span class="project-tag">{{ activeProject.id }}</span>
                 </div>
                 <p class="allocation-location">
-                  <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z" />
-                  </svg>
-                  <span>{{ activeProject.workplace.split(' - ')[0] }} - {{ activeProject.client }}</span>
+                  <span>{{ activeProject.workplace }} • {{ activeProject.client }}</span>
                 </p>
               </div>
 
               <div class="assigned-summary">
-                <span class="assigned-label">DESIGNADOS</span>
+                <span class="assigned-label">ITENS DESIGNADOS</span>
                 <div class="assigned-progress-row">
                   <div class="assigned-track">
-                    <div
-                      class="assigned-fill"
-                      :style="{ width: `${assignedProgressPercent}%` }"
-                    ></div>
+                    <div class="assigned-fill" :style="{ width: `${assignedProgressPercent}%` }"></div>
                   </div>
                   <strong class="assigned-fraction">
                     {{ assignedTotal }} / {{ activeProject.totalSlots }}
@@ -425,18 +544,13 @@ function exibirFeedback(msg: string) {
               </div>
             </div>
 
-            <!-- Área Central Dividida: Itens do Projeto + Colaboradores Disponíveis -->
             <div class="allocation-split">
               <!-- Esquerda: Itens do Projeto -->
               <div class="items-column">
                 <div class="subcolumn-header">
                   <h3>Itens do Projeto</h3>
-                  <button
-                    type="button"
-                    class="select-all-btn"
-                    @click="selecionarTodosItens"
-                  >
-                    Selecionar Todos
+                  <button type="button" class="select-all-btn" @click="selecionarTodosItens">
+                    Alocar Todos
                   </button>
                 </div>
 
@@ -446,10 +560,7 @@ function exibirFeedback(msg: string) {
                     :key="item.id"
                     :class="[
                       'allocation-item-card',
-                      {
-                        active: selectedItemId === item.id,
-                        'drag-over': dragOverItemId === item.id,
-                      },
+                      { active: selectedItemId === item.id, 'drag-over': dragOverItemId === item.id },
                     ]"
                     @click="selectedItemId = item.id"
                     @dragover.prevent="dragOverItemId = item.id"
@@ -459,133 +570,95 @@ function exibirFeedback(msg: string) {
                     <div class="item-card-top">
                       <div class="item-info-left">
                         <div class="item-icon-box">
-                          <!-- Ícone Porta -->
                           <svg v-if="item.iconType === 'door'" width="18" height="18" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2zm-6-6h-2v-2h2v2z" />
                           </svg>
-                          <!-- Ícone Janela -->
                           <svg v-else width="18" height="18" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 8h-6V5h6v6zm-8-6v6H5V5h6zm-6 8h6v6H5v-6zm8 6v-6h6v6h-6z" />
                           </svg>
                         </div>
-
                         <div>
                           <p class="item-title">{{ item.title }}</p>
                           <p class="item-subtitle">{{ item.subtitle }}</p>
                         </div>
                       </div>
 
-                      <span
-                        v-if="item.assigned.length > 0"
-                        class="item-status-pill allocated"
-                      >
-                        ALOCADO
-                      </span>
-                      <span v-else class="item-status-pill pending">
-                        PENDENTE
-                      </span>
+                      <span v-if="item.assigned.length > 0" class="item-status-pill allocated">ALOCADO</span>
+                      <span v-else class="item-status-pill pending">PENDENTE</span>
                     </div>
 
-                    <!-- Chips de Colaboradores Alocados -->
                     <div v-if="item.assigned.length > 0" class="assigned-chips-row">
-                      <div
-                        v-for="person in item.assigned"
-                        :key="person.id"
-                        class="collaborator-chip"
-                      >
-                        <img :src="person.avatar" :alt="person.name" />
-                        <span>{{ person.name }}</span>
+                      <div v-for="team in item.assigned" :key="team.id" class="collaborator-chip">
+                        <span class="chip-initials">EQ</span>
+                        <span>
+                          <strong>{{ team.nome }}</strong>
+                          ({{ team.membros.map((m) => m.nome).join(', ') }})
+                        </span>
                         <button
                           type="button"
                           class="remove-chip-btn"
-                          title="Remover colaborador"
-                          @click.stop="removerColaborador(item, person.id)"
+                          @click.stop="removerEquipeDoItem(item, team.id)"
                         >
                           &times;
                         </button>
                       </div>
                     </div>
 
-                    <!-- Dropzone quando ainda não há colaboradores alocados -->
                     <div v-else class="drop-target-box">
-                      Arraste colaboradores aqui para alocar
+                      Arraste uma equipe aqui ou clique nela ao lado para alocar
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- Direita: Colaboradores Disponíveis -->
+              <!-- Direita: Equipes Formadas -->
               <div class="collaborators-column">
                 <div class="subcolumn-header">
-                  <h3>Colaboradores Disponíveis</h3>
+                  <h3>Equipes Formadas</h3>
+                  <button type="button" class="select-all-btn" @click="showCreateTeamModal = true">
+                    + Criar grupo
+                  </button>
                 </div>
 
                 <div class="collab-search-box">
                   <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
-                  <input
-                    v-model="searchCollaborator"
-                    type="text"
-                    placeholder="Pesquisar nome..."
-                  />
+                  <input v-model="searchTeam" type="text" placeholder="Pesquisar equipe ou técnico..." />
                 </div>
 
                 <div class="collaborators-list">
                   <div
-                    v-for="col in filteredCollaborators"
-                    :key="col.id"
-                    :draggable="col.available"
-                    :class="['collaborator-card', { unavailable: !col.available }]"
-                    :title="col.available ? 'Arraste para um item ou clique para alocar' : col.statusText"
-                    @dragstart="aoIniciarArrasto($event, col)"
-                    @click="alocarPorClique(col)"
+                    v-for="team in filteredTeams"
+                    :key="team.id"
+                    draggable="true"
+                    class="collaborator-card"
+                    @dragstart="aoIniciarArrasto($event, team)"
+                    @click="alocarPorClique(team)"
                   >
                     <div class="collab-left">
-                      <img :src="col.avatar" :alt="col.name" class="collab-avatar" />
+                      <div class="collab-avatar-initials">{{ team.membros.length }}T</div>
                       <div>
-                        <p class="collab-name">{{ col.name }}</p>
-                        <p :class="['collab-status', col.available ? 'text-green' : 'text-red']">
-                          {{ col.statusText }}
+                        <p class="collab-name">{{ team.nome }}</p>
+                        <p class="collab-members-sub">
+                          {{ team.membros.map((m) => m.nome).join(' • ') }}
+                        </p>
+                        <p :class="['collab-status', team.available ? 'text-green' : 'text-amber']">
+                          {{ team.statusText }}
                         </p>
                       </div>
                     </div>
-
-                    <!-- Ícone de Arrasto (Disponível) ou Cadeado (Indisponível) -->
-                    <svg
-                      v-if="col.available"
-                      class="grip-icon"
-                      width="14"
-                      height="14"
-                      fill="currentColor"
-                      viewBox="0 0 16 16"
-                    >
-                      <path d="M5 3a1.25 1.25 0 110 2.5A1.25 1.25 0 015 3zm6 0a1.25 1.25 0 110 2.5A1.25 1.25 0 0111 3zM5 6.75a1.25 1.25 0 110 2.5 1.25 1.25 0 010-2.5zm6 0a1.25 1.25 0 110 2.5 1.25 1.25 0 010-2.5zM5 10.5A1.25 1.25 0 115 13a1.25 1.25 0 010-2.5zm6 0a1.25 1.25 0 110 2.5 1.25 1.25 0 010-2.5z" />
-                    </svg>
-
-                    <svg
-                      v-else
-                      class="lock-icon"
-                      width="14"
-                      height="14"
-                      fill="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
-                    </svg>
                   </div>
+
+                  <p v-if="!carregando && filteredTeams.length === 0" class="empty-msg">
+                    Nenhuma equipe criada ainda. Clique em <strong>+ Nova Equipe</strong>.
+                  </p>
                 </div>
               </div>
             </div>
 
-            <!-- Rodapé do Painel de Alocação -->
             <footer class="allocation-footer">
               <div class="mobile-sync-box">
-                <div class="phone-circle">
-                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                </div>
                 <div>
                   <p class="sync-title">Sincronização com Mobile</p>
                   <p class="sync-subtitle">
@@ -595,18 +668,92 @@ function exibirFeedback(msg: string) {
               </div>
 
               <div class="footer-actions">
-                <button type="button" class="btn-discard" @click="descartarAlteracoes">
+                <button type="button" class="btn-discard" :disabled="salvando" @click="carregarDados">
                   Descartar
                 </button>
-                <button type="button" class="btn-confirm" @click="confirmarAlocacao">
-                  <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 9v4h2l-3 3-3-3h2v-4h2zm1-3V3.5L18.5 8H14z" />
-                  </svg>
-                  <span>Confirmar Alocação de Equipes</span>
+                <button type="button" class="btn-confirm" :disabled="salvando" @click="confirmarAlocacao">
+                  <span>{{ salvando ? 'Salvando...' : 'Confirmar Alocação de Equipes' }}</span>
                 </button>
               </div>
             </footer>
           </section>
+        </div>
+      </div>
+
+      <!-- MODAL: Criar Nova Equipe agrupando Técnicos existentes -->
+      <div
+        v-if="showCreateTeamModal"
+        class="modal-backdrop"
+        @click.self="showCreateTeamModal = false"
+      >
+        <div class="modal-box">
+          <div class="modal-header">
+            <div>
+              <h3>Criar Novo Grupo / Equipe</h3>
+              <p class="modal-sub">Junte os técnicos cadastrados em uma equipe de campo</p>
+            </div>
+            <button type="button" @click="showCreateTeamModal = false">&times;</button>
+          </div>
+
+          <div class="modal-form">
+            <label class="field-label">Nome da Equipe</label>
+            <input
+              v-model="novoNomeEquipe"
+              type="text"
+              class="modal-input"
+              placeholder="Ex: Equipe Alfa - Fachadas"
+            />
+
+            <label class="field-label">Especialidade</label>
+            <input
+              v-model="novaEspecialidade"
+              type="text"
+              class="modal-input"
+              placeholder="Ex: Linha Gold / Pele de Vidro"
+            />
+
+            <label class="field-label">Selecione os Técnicos da Equipe</label>
+            <div class="tech-checklist">
+              <div
+                v-for="tech in allTechnicians"
+                :key="tech.id"
+                :class="['tech-option', { checked: tecnicosSelecionados.includes(tech.id) }]"
+                @click="toggleTecnicoModal(tech.id)"
+              >
+                <div class="tech-option-left">
+                  <input
+                    type="checkbox"
+                    :checked="tecnicosSelecionados.includes(tech.id)"
+                    @change.stop="toggleTecnicoModal(tech.id)"
+                  />
+                  <span>{{ tech.nome }}</span>
+                </div>
+
+                <button
+                  v-if="tecnicosSelecionados.includes(tech.id)"
+                  type="button"
+                  :class="['leader-pill', { active: liderSelecionado === tech.id }]"
+                  @click.stop="liderSelecionado = tech.id"
+                >
+                  {{ liderSelecionado === tech.id ? '★ Líder' : 'Definir Líder' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn-discard" @click="showCreateTeamModal = false">
+              Cancelar
+            </button>
+            <button
+              type="button"
+              class="btn-confirm"
+              :disabled="criandoEquipe || !novoNomeEquipe.trim() || tecnicosSelecionados.length === 0"
+              @click="salvarNovaEquipe"
+            >
+              {{ criandoEquipe ? 'Criando...' : 'Salvar Equipe' }}
+            </button>
+          </div>
         </div>
       </div>
     </main>
@@ -631,9 +778,9 @@ function exibirFeedback(msg: string) {
   background-color: #F8FAFC;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 
-/* Topbar */
 .topbar {
   background: #FFFFFF;
   border-bottom: 1px solid #F1F5F9;
@@ -678,23 +825,28 @@ function exibirFeedback(msg: string) {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
 
-.icon-btn {
-  background: transparent;
+.btn-new-team {
+  background: #1E3A8A;
+  color: #FFFFFF;
   border: none;
-  color: #475569;
-  padding: 8px;
   border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.icon-btn:hover {
-  background: #F1F5F9;
+.btn-new-team:hover {
+  background: #1E40AF;
+}
+
+.divider {
+  width: 1px;
+  height: 28px;
+  background: #E2E8F0;
 }
 
 .user-profile {
@@ -720,20 +872,24 @@ function exibirFeedback(msg: string) {
   color: #64748B;
 }
 
-.user-avatar {
+.user-avatar-initials {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  object-fit: cover;
-  border: 1px solid #E2E8F0;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* Container Geral */
 .content-container {
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px 28px 40px;
+  padding: 24px 28px 64px;
 }
 
 .workspace-grid {
@@ -750,12 +906,14 @@ function exibirFeedback(msg: string) {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
-/* Coluna Esquerda: Projetos em Aberto */
 .projects-panel {
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: calc(100vh - 110px);
+  position: sticky;
+  top: 84px;
 }
 
 .panel-header {
@@ -769,7 +927,6 @@ function exibirFeedback(msg: string) {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
-  color: #1E293B;
 }
 
 .panel-subtitle {
@@ -785,44 +942,39 @@ function exibirFeedback(msg: string) {
   font-weight: 700;
   padding: 4px 10px;
   border-radius: 999px;
-  white-space: nowrap;
 }
 
-.search-box {
+.search-box,
+.collab-search-box {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-.search-box svg {
+.search-box svg,
+.collab-search-box svg {
   position: absolute;
   left: 12px;
   color: #94A3B8;
-  pointer-events: none;
 }
 
-.search-box input {
+.search-box input,
+.collab-search-box input {
   width: 100%;
   background: #FAFBFD;
   border: 1px solid #E2E8F0;
   border-radius: 11px;
   padding: 9px 12px 9px 36px;
   font-size: 12px;
-  color: #334155;
   outline: none;
-  transition: 0.15s;
-}
-
-.search-box input:focus {
-  background: #FFFFFF;
-  border-color: #93C5FD;
-  box-shadow: 0 0 0 3px #EFF6FF;
 }
 
 .projects-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .project-card {
@@ -831,24 +983,16 @@ function exibirFeedback(msg: string) {
   border-radius: 14px;
   padding: 16px;
   cursor: pointer;
-  transition: 0.18s ease;
-}
-
-.project-card:hover {
-  border-color: #93C5FD;
-  background: #FAFBFD;
 }
 
 .project-card.selected {
   background: #1E3A8A;
   border-color: #1E3A8A;
   color: #FFFFFF;
-  box-shadow: 0 8px 18px rgba(30, 58, 138, 0.22);
 }
 
 .project-card-top {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
 }
@@ -866,7 +1010,6 @@ function exibirFeedback(msg: string) {
 .project-badge {
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.04em;
   padding: 3px 8px;
   border-radius: 999px;
 }
@@ -877,19 +1020,14 @@ function exibirFeedback(msg: string) {
 }
 
 .badge-urgent {
-  background: #F1F5F9;
-  color: #475569;
+  background: #FEE2E2;
+  color: #EF4444;
 }
 
 .project-client {
   margin: 0;
   font-size: 14px;
   font-weight: 700;
-  color: #1E293B;
-}
-
-.project-card.selected .project-client {
-  color: #FFFFFF;
 }
 
 .project-workplace {
@@ -906,7 +1044,6 @@ function exibirFeedback(msg: string) {
   padding-top: 10px;
   border-top: 1px solid #F1F5F9;
   display: flex;
-  align-items: center;
   justify-content: space-between;
   font-size: 11px;
   color: #64748B;
@@ -917,13 +1054,6 @@ function exibirFeedback(msg: string) {
   color: #DBEAFE;
 }
 
-.meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* Coluna Direita: Painel de Alocação */
 .allocation-panel {
   display: flex;
   flex-direction: column;
@@ -933,8 +1063,6 @@ function exibirFeedback(msg: string) {
   padding: 24px 28px 20px;
   border-bottom: 1px solid #F1F5F9;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
@@ -949,7 +1077,6 @@ function exibirFeedback(msg: string) {
   margin: 0;
   font-size: 18px;
   font-weight: 800;
-  color: #1E293B;
 }
 
 .project-tag {
@@ -964,16 +1091,8 @@ function exibirFeedback(msg: string) {
 
 .allocation-location {
   margin: 8px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-size: 13px;
-  font-weight: 500;
   color: #64748B;
-}
-
-.allocation-location svg {
-  color: #1E3A8A;
 }
 
 .assigned-summary {
@@ -986,7 +1105,6 @@ function exibirFeedback(msg: string) {
 .assigned-label {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
   color: #94A3B8;
 }
 
@@ -1007,17 +1125,8 @@ function exibirFeedback(msg: string) {
 .assigned-fill {
   height: 100%;
   background: #1D4ED8;
-  border-radius: 999px;
-  transition: width 0.25s ease;
 }
 
-.assigned-fraction {
-  font-size: 14px;
-  font-weight: 800;
-  color: #1E293B;
-}
-
-/* Split: Itens do Projeto (Esquerda) + Colaboradores Disponíveis (Direita) */
 .allocation-split {
   display: grid;
   grid-template-columns: 1.55fr 1fr;
@@ -1045,7 +1154,6 @@ function exibirFeedback(msg: string) {
   margin: 0;
   font-size: 13.5px;
   font-weight: 700;
-  color: #1E293B;
 }
 
 .select-all-btn {
@@ -1055,18 +1163,14 @@ function exibirFeedback(msg: string) {
   font-size: 11.5px;
   font-weight: 700;
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
 }
 
-.select-all-btn:hover {
-  background: #EFF6FF;
-}
-
-.project-items-list {
+.project-items-list,
+.collaborators-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .allocation-item-card {
@@ -1075,7 +1179,6 @@ function exibirFeedback(msg: string) {
   border-radius: 14px;
   padding: 16px;
   cursor: pointer;
-  transition: 0.16s ease;
 }
 
 .allocation-item-card.active {
@@ -1090,7 +1193,6 @@ function exibirFeedback(msg: string) {
 
 .item-card-top {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
@@ -1110,14 +1212,12 @@ function exibirFeedback(msg: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
 }
 
 .item-title {
   margin: 0;
   font-size: 13.5px;
   font-weight: 700;
-  color: #1E293B;
 }
 
 .item-subtitle {
@@ -1129,10 +1229,8 @@ function exibirFeedback(msg: string) {
 .item-status-pill {
   font-size: 9.5px;
   font-weight: 800;
-  letter-spacing: 0.03em;
   padding: 4px 10px;
   border-radius: 999px;
-  white-space: nowrap;
 }
 
 .item-status-pill.allocated {
@@ -1161,16 +1259,19 @@ function exibirFeedback(msg: string) {
   border-radius: 999px;
   padding: 4px 10px 4px 5px;
   font-size: 11.5px;
-  font-weight: 600;
-  color: #1E293B;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
-.collaborator-chip img {
+.chip-initials {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  object-fit: cover;
+  background: #1E3A8A;
+  color: #FFFFFF;
+  font-size: 9.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .remove-chip-btn {
@@ -1178,13 +1279,7 @@ function exibirFeedback(msg: string) {
   border: none;
   color: #94A3B8;
   font-size: 14px;
-  line-height: 1;
   cursor: pointer;
-  padding: 0 2px;
-}
-
-.remove-chip-btn:hover {
-  color: #EF4444;
 }
 
 .drop-target-box {
@@ -1198,65 +1293,16 @@ function exibirFeedback(msg: string) {
   color: #94A3B8;
 }
 
-/* Colaboradores Disponíveis */
-.collab-search-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.collab-search-box svg {
-  position: absolute;
-  left: 11px;
-  color: #94A3B8;
-  pointer-events: none;
-}
-
-.collab-search-box input {
-  width: 100%;
-  background: #FFFFFF;
-  border: 1px solid #E2E8F0;
-  border-radius: 10px;
-  padding: 8px 12px 8px 32px;
-  font-size: 12px;
-  color: #334155;
-  outline: none;
-}
-
-.collab-search-box input:focus {
-  border-color: #93C5FD;
-}
-
-.collaborators-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .collaborator-card {
   background: #FFFFFF;
   border: 1px solid #E2E8F0;
   border-radius: 12px;
   padding: 11px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
   cursor: grab;
-  transition: 0.15s;
 }
 
-.collaborator-card:hover:not(.unavailable) {
+.collaborator-card:hover {
   border-color: #93C5FD;
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
-}
-
-.collaborator-card.unavailable {
-  background: #F8FAFC;
-  border-color: #F1F5F9;
-  cursor: not-allowed;
-  opacity: 0.78;
 }
 
 .collab-left {
@@ -1265,11 +1311,17 @@ function exibirFeedback(msg: string) {
   gap: 10px;
 }
 
-.collab-avatar {
+.collab-avatar-initials {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  object-fit: cover;
+  background: #EFF6FF;
+  color: #1E3A8A;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -1277,15 +1329,16 @@ function exibirFeedback(msg: string) {
   margin: 0;
   font-size: 12.5px;
   font-weight: 700;
-  color: #1E293B;
 }
 
-.collaborator-card.unavailable .collab-name {
+.collab-members-sub {
+  margin: 2px 0;
+  font-size: 11px;
   color: #64748B;
 }
 
 .collab-status {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 10.5px;
   font-weight: 600;
 }
@@ -1294,48 +1347,22 @@ function exibirFeedback(msg: string) {
   color: #10B981;
 }
 
-.text-red {
-  color: #EF4444;
+.text-amber {
+  color: #D97706;
 }
 
-.grip-icon,
-.lock-icon {
-  color: #CBD5E1;
-  flex-shrink: 0;
-}
-
-/* Rodapé do Painel */
 .allocation-footer {
   padding: 18px 28px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-}
-
-.mobile-sync-box {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.phone-circle {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #F1F5F9;
-  color: #64748B;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .sync-title {
   margin: 0;
   font-size: 12px;
   font-weight: 700;
-  color: #1E293B;
 }
 
 .sync-subtitle {
@@ -1346,8 +1373,6 @@ function exibirFeedback(msg: string) {
 
 .footer-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: 12px;
 }
 
@@ -1360,12 +1385,6 @@ function exibirFeedback(msg: string) {
   padding: 11px 20px;
   border-radius: 10px;
   cursor: pointer;
-  transition: 0.15s;
-}
-
-.btn-discard:hover {
-  background: #F8FAFC;
-  border-color: #CBD5E1;
 }
 
 .btn-confirm {
@@ -1376,22 +1395,154 @@ function exibirFeedback(msg: string) {
   font-weight: 700;
   padding: 11px 20px;
   border-radius: 10px;
-  display: inline-flex;
+  cursor: pointer;
+}
+
+.btn-confirm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Modal Criar Equipe */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.modal-box {
+  background: #FFFFFF;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 460px;
+  padding: 24px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-sub {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: #64748B;
+}
+
+.modal-header button {
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #94A3B8;
+  cursor: pointer;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-top: 4px;
+}
+
+.modal-input {
+  border: 1px solid #CBD5E1;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  outline: none;
+}
+
+.tech-checklist {
+  max-height: 210px;
+  overflow-y: auto;
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tech-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tech-option:hover {
+  background: #F8FAFC;
+}
+
+.tech-option.checked {
+  background: #EFF6FF;
+}
+
+.tech-option-left {
+  display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.leader-pill {
+  border: 1px solid #CBD5E1;
+  background: #FFFFFF;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(30, 58, 138, 0.2);
-  transition: 0.15s;
 }
 
-.btn-confirm:hover {
-  background: #1E40AF;
+.leader-pill.active {
+  background: #1E3A8A;
+  color: #FFFFFF;
+  border-color: #1E3A8A;
 }
 
-/* Responsividade */
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.empty-msg {
+  text-align: center;
+  font-size: 12px;
+  color: #94A3B8;
+  padding: 16px 0;
+}
+
 @media (max-width: 1180px) {
   .workspace-grid {
     grid-template-columns: 1fr;
+  }
+  .projects-panel {
+    position: static;
+    max-height: none;
   }
 }
 
@@ -1402,12 +1553,6 @@ function exibirFeedback(msg: string) {
   .items-column {
     border-right: none;
     border-bottom: 1px solid #F1F5F9;
-  }
-}
-
-@media (max-width: 640px) {
-  .user-info {
-    display: none;
   }
 }
 </style>
