@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
 import { getToken, getUsuario } from '../utils/auth'
+import UserMenu from '../Components/UserMenu.vue'
 
 type FilterTab = 'Todos' | 'Crítico' | 'Aberto' | 'Finalizado'
 type OccurrenceStatus = 'critico' | 'aberto' | 'resolvido'
@@ -42,17 +43,6 @@ const FALLBACK_IMG =
 
 const usuarioLogado = getUsuario()
 const nomeUsuario = computed(() => usuarioLogado?.nome || 'Gestor')
-const cargoUsuario = computed(() =>
-  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Técnico de Campo'
-)
-const iniciaisUsuario = computed(() =>
-  nomeUsuario.value
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p.charAt(0).toUpperCase())
-    .join('')
-)
 
 const searchQuery = ref<string>('')
 const activeTab = ref<FilterTab>('Todos')
@@ -436,13 +426,7 @@ onMounted(() => {
 
             <div class="divider"></div>
 
-            <div class="user-profile">
-              <div class="user-info">
-                <p class="user-name">{{ nomeUsuario }}</p>
-                <p class="user-role">{{ cargoUsuario }}</p>
-              </div>
-              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
-            </div>
+            <UserMenu />
           </div>
         </header>
 

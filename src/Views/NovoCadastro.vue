@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from '../Components/Sidebar.vue'
 import { getToken, getUsuario } from '../utils/auth'
+import UserMenu from '../Components/UserMenu.vue'
 
 type PaymentMethod = 'CARTAO' | 'BOLETO' | 'CHEQUE'
 
@@ -241,13 +242,7 @@ async function validarMedicao() {
             <h1 class="page-title">Novo Cadastro e Medição Final</h1>
           </div>
 
-          <div class="operator-box">
-            <div class="operator-info">
-              <span class="operator-label">OPERADOR</span>
-              <span class="operator-name">{{ nomeOperador }}</span>
-            </div>
-            <div class="operator-avatar-initials">{{ iniciaisOperador }}</div>
-          </div>
+          <UserMenu />
         </div>
       </header>
 

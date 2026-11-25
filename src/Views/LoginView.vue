@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { setSessao } from '../utils/auth'
+import SuporteModal from '../Components/SuporteModal.vue'
 
 const router = useRouter()
 
@@ -11,6 +12,7 @@ const lembrar = ref(false)
 const mostrarSenha = ref(false)
 const carregando = ref(false)
 const erro = ref('')
+const mostrarSuporte = ref(false)
 
 // Endereço da API (se existir VITE_API_URL no .env, ele tem prioridade)
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5037/api').replace(/\/+$/, '')
@@ -53,7 +55,6 @@ async function entrar() {
 
     // ---------- PASSO 2: ler a resposta ----------
     const textoResposta = await response.text()
-    console.log('Status da API:', response.status, '| Resposta:', textoResposta)
 
     let data: any = {}
     try {
@@ -214,7 +215,7 @@ async function entrar() {
           </button>
         </form>
 
-        <a href="#" class="support">
+        <a href="#" class="support" @click.prevent="mostrarSuporte = true">
           <span class="support__icon" aria-hidden="true">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
@@ -232,6 +233,8 @@ async function entrar() {
         </a>
       </div>
     </section>
+
+    <SuporteModal :aberto="mostrarSuporte" @fechar="mostrarSuporte = false" />
 
     <aside class="login__hero" aria-hidden="false">
       <div class="facade" aria-hidden="true"></div>

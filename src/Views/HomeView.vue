@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from '../Components/Sidebar.vue'
 import { getToken, getUsuario } from '../utils/auth'
+import UserMenu from '../Components/UserMenu.vue'
 
 type TabCategory = 'Todos' | 'Medição' | 'Produção' | 'Liberação' | 'Instalação'
 type StatusKey = 'medicao' | 'producao' | 'instalacao' | 'concluido' | 'liberacao'
@@ -60,21 +61,7 @@ const usuarioLogado = getUsuario()
 
 const nomeUsuario = computed(() => usuarioLogado?.nome || 'Usuário')
 
-const cargoUsuario = computed(() => {
-  const role = usuarioLogado?.roles?.toUpperCase()
-  if (role === 'GESTOR') return 'Gestor'
-  if (role === 'TECNICO_CAMPO') return 'Técnico de Campo'
-  return role || 'Colaborador'
-})
 
-const iniciaisUsuario = computed(() => {
-  return nomeUsuario.value
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p.charAt(0).toUpperCase())
-    .join('')
-})
 
 function aoNavegar(menu: string) {
   console.log('Menu selecionado:', menu)
@@ -372,15 +359,7 @@ onMounted(() => {
 
             <div class="divider"></div>
 
-            <div class="user-profile">
-              <div class="user-info">
-                <p class="user-name">{{ nomeUsuario }}</p>
-                <p class="user-role">{{ cargoUsuario }}</p>
-              </div>
-              <div class="user-avatar-initials" :title="nomeUsuario">
-                {{ iniciaisUsuario }}
-              </div>
-            </div>
+            <UserMenu />
           </div>
         </div>
       </header>

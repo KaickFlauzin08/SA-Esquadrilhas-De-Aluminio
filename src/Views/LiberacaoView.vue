@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import Sidebar from '../Components/Sidebar.vue'
 import { getToken, getUsuario } from '../utils/auth'
+import UserMenu from '../Components/UserMenu.vue'
 
 type ProjectBadgeType = 'SELECIONADO' | 'URGENTE' | 'VALIDADO'
 type ItemStatus = 'produzido' | 'bloqueado' | 'pendente'
@@ -86,17 +87,6 @@ const etapasChecklist: EtapaChecklist[] = [
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
 const usuarioLogado = getUsuario()
 const nomeUsuario = computed(() => usuarioLogado?.nome || 'Técnico')
-const cargoUsuario = computed(() =>
-  usuarioLogado?.roles?.toUpperCase() === 'GESTOR' ? 'Gestor de Produção' : 'Técnico de Campo'
-)
-const iniciaisUsuario = computed(() =>
-  nomeUsuario.value
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p.charAt(0).toUpperCase())
-    .join('')
-)
 
 const searchProject = ref<string>('')
 const selectedProjectId = ref<string>('')
@@ -458,13 +448,7 @@ onMounted(() => {
 
             <div class="divider"></div>
 
-            <div class="user-profile">
-              <div class="user-info">
-                <p class="user-name">{{ nomeUsuario }}</p>
-                <p class="user-role">{{ cargoUsuario }}</p>
-              </div>
-              <div class="user-avatar-initials">{{ iniciaisUsuario }}</div>
-            </div>
+            <UserMenu />
           </div>
         </div>
       </header>
