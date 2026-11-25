@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Sidebar from '../Components/Sidebar.vue'
 import { getToken, getUsuario } from '../utils/auth'
+import UserMenu from '../Components/UserMenu.vue'
 
 type Status = 'novo' | 'pendente' | 'execucao' | 'concluido'
 type Aba = 'todos' | 'novos' | 'pendencias'
@@ -353,6 +354,8 @@ onMounted(() => {
             </svg>
             Novo Projeto
           </button>
+
+          <UserMenu />
         </div>
       </header>
 

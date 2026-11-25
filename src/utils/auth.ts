@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 export interface UsuarioLogado {
   id: number
   nome: string
@@ -8,11 +10,18 @@ export interface UsuarioLogado {
 
 // Armazenado apenas em memória RAM: ao dar F5 / atualizar a página, tudo é zerado
 let tokenMemoria: string | null = null
-let usuarioMemoria: UsuarioLogado | null = null
+// "ref" faz as telas atualizarem sozinhas quando o perfil muda (nome no topo, por exemplo)
+const usuarioMemoria = ref<UsuarioLogado | null>(null)
 
 export function setSessao(token: string, usuario: UsuarioLogado): void {
   tokenMemoria = token
-  usuarioMemoria = usuario
+  usuarioMemoria.value = usuario
+}
+
+// Atualiza só alguns campos do usuário logado (usado ao editar o perfil)
+export function atualizarUsuario(dados: Partial<UsuarioLogado>): void {
+  if (!usuarioMemoria.value) return
+  usuarioMemoria.value = { ...usuarioMemoria.value, ...dados }
 }
 
 export function getToken(): string | null {
@@ -20,7 +29,7 @@ export function getToken(): string | null {
 }
 
 export function getUsuario(): UsuarioLogado | null {
-  return usuarioMemoria
+  return usuarioMemoria.value
 }
 
 export function isAutenticado(): boolean {
@@ -28,7 +37,7 @@ export function isAutenticado(): boolean {
 }
 
 export function getRole(): string | null {
-  return usuarioMemoria?.roles?.trim().toUpperCase() || 'TECNICO_CAMPO'
+  return usuarioMemoria.value?.roles?.trim().toUpperCase() || 'TECNICO_CAMPO'
 }
 
 export function isGestor(): boolean {
@@ -37,5 +46,5 @@ export function isGestor(): boolean {
 
 export function logout(): void {
   tokenMemoria = null
-  usuarioMemoria = null
+  usuarioMemoria.value = null
 }

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import SuporteModal from './SuporteModal.vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
+const mostrarSuporte = ref(false)
 
 const projetosAberto = computed(() => route.path.startsWith('/projetos'))
 const equipesAberto = computed(() => route.path.startsWith('/equipes'))
@@ -129,9 +131,11 @@ function isActive(path: string) {
           <strong>Suporte Técnico</strong>
         </div>
         <p>Precisa de ajuda com o sistema de pedidos?</p>
-        <button class="support-card__btn">Contatar</button>
+        <button type="button" class="support-card__btn" @click="mostrarSuporte = true">Contatar</button>
       </div>
     </div>
+
+    <SuporteModal :aberto="mostrarSuporte" @fechar="mostrarSuporte = false" />
   </aside>
 </template>
 
