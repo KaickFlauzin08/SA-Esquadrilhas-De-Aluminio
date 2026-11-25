@@ -130,6 +130,9 @@ const tecnicos = listaUsuarios.filter(
   (u: any) => u.ativo !== false && (u.perfil || '').toUpperCase() !== 'GESTOR'
 )
 
+    // Preenche a lista de técnicos que aparece no modal "Nova Equipe"
+    allTechnicians.value = tecnicos.map((u: any) => ({ id: u.id, nome: u.nome }))
+
     // Verifica quais técnicos já estão em projetos ativos
     const tecnicosOcupados = new Set<number>()
     for (const p of listaProjetos) {

@@ -89,26 +89,32 @@ const router = createRouter({
   ]
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   const logado = isAutenticado()
   const role = getRole()
 
+  // 1. Se a rota é pública (Login)
   if (to.meta.publica) {
     if (logado) {
-      return next(role === 'GESTOR' ? '/home' : '/projetos')
+      return role === 'GESTOR' ? '/home' : '/projetos'
     }
-    return next()
+    return true
   }
 
+  // 2. Se não está autenticado, manda para o Login (evitando redirecionar se já estiver lá)
   if (!logado) {
-    return next('/')
+    return to.path !== '/' ? '/' : true
   }
 
+  // 3. Verifica permissão de role sem gerar loop caso já esteja em '/projetos'
   if (to.meta.roles && (!role || !to.meta.roles.includes(role))) {
-    return next('/projetos')
+    if (to.path !== '/projetos') {
+      return '/projetos'
+    }
+    return '/'
   }
 
-  return next()
+  return true
 })
 
 export default router

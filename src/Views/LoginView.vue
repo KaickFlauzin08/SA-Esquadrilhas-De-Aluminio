@@ -12,7 +12,8 @@ const mostrarSenha = ref(false)
 const carregando = ref(false)
 const erro = ref('')
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5037/api'
+// Endereço da API (se existir VITE_API_URL no .env, ele tem prioridade)
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5037/api').replace(/\/+$/, '')
 
 const stats = [
   { valor: '142', rotulo: 'Projetos ativos' },
@@ -31,37 +32,109 @@ async function entrar() {
   carregando.value = true
 
   try {
-    const response = await fetch(`${API_URL}/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: email.value,
-        numero: '',
-        password: senha.value,
-      }),
-    })
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      erro.value = data.mensagem || data.title || 'Credenciais inválidas.'
+    // ---------- PASSO 1: chamar a API ----------
+    let response: Response
+    try {
+      response = await fetch(`${API_URL}/Auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.value,
+          numero: '',
+          password: senha.value,
+        }),
+      })
+    } catch (e) {
+      // Só cai aqui se REALMENTE não conseguiu falar com a API
+      console.error('Falha ao chamar a API em:', `${API_URL}/Auth/login`, e)
+      erro.value = `Não foi possível conectar à API (${API_URL}). Veja o Console (F12).`
       return
     }
 
-    // Salva apenas em memória (perde o acesso ao atualizar a página)
-    setSessao(data.token, data.usuario)
+    // ---------- PASSO 2: ler a resposta ----------
+    const textoResposta = await response.text()
+    console.log('Status da API:', response.status, '| Resposta:', textoResposta)
 
-    const role = data.usuario.roles?.toUpperCase() || 'TECNICO_CAMPO'
-
-    if (role === 'GESTOR') {
-      router.push('/home')
-    } else {
-      router.push('/projetos')
+    let data: any = {}
+    try {
+      data = JSON.parse(textoResposta)
+    } catch {
+      data = { token: textoResposta }
     }
-  } catch (e) {
-    erro.value = 'Não foi possível conectar ao servidor. Verifique se a API está rodando.'
+
+    if (!response.ok) {
+      erro.value =
+        data.mensagem ||
+        data.message ||
+        data.title ||
+        `Erro ${response.status} ao fazer login.`
+      return
+    }
+
+    const tokenRecebido: string | undefined =
+      typeof data === 'string'
+        ? data
+        : data.token || data.Token || data.accessToken || data.jwt
+
+    if (!tokenRecebido) {
+      erro.value = 'Token não encontrado na resposta da API (veja o Console).'
+      return
+    }
+
+    // ---------- PASSO 3: montar o usuário ----------
+    let usuarioRecebido = data.usuario || data.Usuario || data.user
+    if (!usuarioRecebido) {
+      try {
+        const payloadBase64 = tokenRecebido.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/')
+        const payload = JSON.parse(atob(payloadBase64))
+        const roleJwt =
+          payload.role ||
+          payload.roles ||
+          payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/role'] ||
+          'TECNICO_CAMPO'
+
+        usuarioRecebido = {
+          id: Number(payload.id || payload.sub || payload.nameid || 0),
+          nome:
+            payload.unique_name ||
+            payload.nome ||
+            payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/name'] ||
+            email.value,
+          email: payload.email || email.value,
+          roles: Array.isArray(roleJwt) ? roleJwt[0] : roleJwt,
+        }
+      } catch {
+        usuarioRecebido = {
+          id: 0,
+          nome: email.value,
+          email: email.value,
+          roles: 'TECNICO_CAMPO',
+        }
+      }
+    }
+
+    // ---------- PASSO 4: guardar a sessão ----------
+    try {
+      setSessao(tokenRecebido, usuarioRecebido)
+    } catch (e) {
+      console.error('Erro dentro do setSessao (utils/auth.ts):', e)
+      erro.value = 'O login deu certo, mas falhou ao salvar a sessão (veja o Console).'
+      return
+    }
+
+    // ---------- PASSO 5: ir para a próxima tela ----------
+    const role = String(usuarioRecebido.roles ?? '').trim().toUpperCase() || 'TECNICO_CAMPO'
+    const destino = role === 'GESTOR' ? '/home' : '/projetos'
+
+    try {
+      const falha = await router.replace(destino)
+      if (falha) {
+        console.warn('A navegação para', destino, 'foi bloqueada:', falha)
+      }
+    } catch (e) {
+      console.error('Erro ao ir para', destino, e)
+      erro.value = `Login ok, mas a rota ${destino} não abriu (veja o Console).`
+    }
   } finally {
     carregando.value = false
   }
@@ -72,9 +145,9 @@ async function entrar() {
   <div class="login">
     <section class="login__form-side">
       <div class="login__box">
-      <div class="brand">
-        <img src="/Sa_logo.jpg" alt="SA Esquadrias de Alumínio" class="brand__img" />
-      </div>
+        <div class="brand">
+          <img src="/Sa_logo.jpg" alt="SA Esquadrias de Alumínio" class="brand__img" />
+        </div>
 
         <h1 class="login__title">Bem-vindo de volta</h1>
         <p class="login__subtitle">
@@ -195,8 +268,6 @@ async function entrar() {
 html, body {
   margin: 0;
   padding: 0;
-  height: 100%;
-  overflow: hidden;
 }
 
 .login {
