@@ -19,6 +19,7 @@ import EquipesView from '../Views/EquipesVIew.vue'
 import TecnicosView from '../Views/TecnicosView.vue'
 import NovoCadastroView from '../Views/NovoCadastro.vue'
 
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [

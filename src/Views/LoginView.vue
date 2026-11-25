@@ -53,6 +53,7 @@ async function entrar() {
       return
     }
 
+    
     // ---------- PASSO 2: ler a resposta ----------
     const textoResposta = await response.text()
 

@@ -280,6 +280,7 @@ function isActive(path: string) {
   transition: background-color 0.15s;
 }
 
+
 .support-card__btn:hover {
   background-color: #f8fafc;
 }

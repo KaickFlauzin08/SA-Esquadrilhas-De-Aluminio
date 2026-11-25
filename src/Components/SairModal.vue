@@ -18,6 +18,7 @@ function aoApertarTecla(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('fechar')
 }
 
+
 watch(
   () => props.aberto,
   (aberto) => {

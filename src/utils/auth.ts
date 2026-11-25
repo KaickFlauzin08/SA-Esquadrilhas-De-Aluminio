@@ -40,6 +40,7 @@ export function getRole(): string | null {
   return usuarioMemoria.value?.roles?.trim().toUpperCase() || 'TECNICO_CAMPO'
 }
 
+
 export function isGestor(): boolean {
   return getRole() === 'GESTOR'
 }
