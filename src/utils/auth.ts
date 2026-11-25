@@ -24,11 +24,11 @@ export function getUsuario(): UsuarioLogado | null {
 }
 
 export function isAutenticado(): boolean {
-  return !!tokenMemoria
+  return Boolean(tokenMemoria && tokenMemoria.trim().length > 0)
 }
 
 export function getRole(): string | null {
-  return usuarioMemoria?.roles?.toUpperCase() || null
+  return usuarioMemoria?.roles?.trim().toUpperCase() || 'TECNICO_CAMPO'
 }
 
 export function isGestor(): boolean {

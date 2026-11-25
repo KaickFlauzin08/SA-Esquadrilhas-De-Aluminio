@@ -26,6 +26,8 @@ interface ExpeditionProject {
   updatedAt: string
   badge?: ProjectBadgeType
   statusProducao: string
+  bloqueado: boolean
+  pendencias: string[]
   items: ChecklistItem[]
 }
 
@@ -127,15 +129,17 @@ async function carregarExpedicao() {
   try {
     const headers = { Authorization: `Bearer ${getToken()}` }
 
-    const [resProj, resOrc, resReg] = await Promise.all([
+    const [resProj, resOrc, resReg, resOco] = await Promise.all([
       fetch(`${API_URL}/projeto`, { headers }),
       fetch(`${API_URL}/orcamento`, { headers }),
       fetch(`${API_URL}/registroobra`, { headers }),
+      fetch(`${API_URL}/ocorrencia?resolvida=false`, { headers }),
     ])
 
     const listaProjetos = resProj.ok ? await resProj.json() : []
     const listaOrcamentos = resOrc.ok ? await resOrc.json() : []
     const listaRegistros = resReg.ok ? await resReg.json() : []
+    const listaOcorrencias = resOco.ok ? await resOco.json() : []
 
     const mapaOrc = new Map<number, any>()
     for (const o of listaOrcamentos) mapaOrc.set(o.id, o)
@@ -150,7 +154,16 @@ async function carregarExpedicao() {
       filtradosPorPerfil.map(async (p: any) => {
         const orc = mapaOrc.get(p.orcamentoId)
         const registrosProj = listaRegistros.filter((r: any) => r.projetoId === p.id)
-        const ocorrenciasAbertas = registrosProj.filter((r: any) => !r.resolvido)
+        const pendenciasRegistro = registrosProj
+          .filter((r: any) => !r.resolvido)
+          .map((r: any) => ({ descricao: r.descricao || 'Pendência em aberto' }))
+        const pendenciasOcorrencia = listaOcorrencias
+          .filter((o: any) => o.projetoId === p.id && !o.resolvida)
+          .map((o: any) => ({
+            descricao: `${o.titulo}${o.descricao ? ': ' + o.descricao : ''}`,
+          }))
+        // Qualquer ocorrência em aberto (das duas fontes) trava o projeto
+        const ocorrenciasAbertas = [...pendenciasRegistro, ...pendenciasOcorrencia]
 
         let itensApi: any[] = []
         try {
@@ -185,8 +198,8 @@ async function carregarExpedicao() {
         })
 
         let badge: ProjectBadgeType | undefined
-        if (p.statusProducao === 'CONCLUIDO' || jaLiberado) badge = 'VALIDADO'
-        else if (ocorrenciasAbertas.length > 0) badge = 'URGENTE'
+        if (ocorrenciasAbertas.length > 0) badge = 'URGENTE'
+        else if (p.statusProducao === 'CONCLUIDO' || jaLiberado) badge = 'VALIDADO'
 
         const ano = (p.dataInicioContrato || '2026').slice(0, 4)
 
@@ -200,6 +213,8 @@ async function carregarExpedicao() {
           updatedAt: tempoRelativo(p.dataMedicaoFinal || p.dataInicioContrato),
           badge,
           statusProducao: p.statusProducao || 'AGUARDANDO_MEDICAO',
+          bloqueado: ocorrenciasAbertas.length > 0,
+          pendencias: ocorrenciasAbertas.map((o: any) => o.descricao as string),
           items,
         }
       })
@@ -246,6 +261,8 @@ const etapaAtualIndex = computed<number>(() => {
 
 const etapaAtualObj = computed<EtapaChecklist>(() => etapasChecklist[etapaAtualIndex.value]!)
 
+const projetoBloqueado = computed<boolean>(() => activeProject.value?.bloqueado ?? false)
+
 const totalChecklistCount = computed<number>(() => {
   return activeProject.value?.items.length ?? 0
 })
@@ -266,10 +283,11 @@ function selecionarProjeto(id: string) {
 }
 
 function alternarItem(item: ChecklistItem) {
-  item.checked = !item.checked
-  if (item.checked && item.status === 'bloqueado') {
-    item.status = 'produzido'
+  if (item.status === 'bloqueado') {
+    mostrarToast('Item Bloqueado', 'Resolva a ocorrência deste projeto para liberar o item.')
+    return
   }
+  item.checked = !item.checked
 }
 
 function marcarTodosComoProntos() {
@@ -286,6 +304,14 @@ function marcarTodosComoProntos() {
 /* ---------- Avançar / Concluir Etapa (Sincroniza na hora com o Gestor) ---------- */
 async function avancarParaEtapa(novoStatus: string, etapaConcluidaLabel?: string) {
   if (!activeProject.value || salvando.value) return
+
+  // TRAVA: com ocorrência em aberto não pode avançar de etapa
+  const indiceNovo = etapasChecklist.findIndex((e) => e.codigo === novoStatus)
+  if (activeProject.value.bloqueado && indiceNovo > etapaAtualIndex.value) {
+    mostrarToast('Etapa Bloqueada', 'Há ocorrência em aberto neste projeto. Resolva antes de avançar.')
+    return
+  }
+
   salvando.value = true
 
   const proj = activeProject.value
@@ -559,6 +585,15 @@ onMounted(() => {
                 </div>
               </div>
 
+              <!-- ALERTA: projeto travado por ocorrência -->
+              <div v-if="projetoBloqueado" class="block-alert" role="alert">
+                <strong>🔒 Projeto travado por ocorrência em aberto</strong>
+                <ul>
+                  <li v-for="(pend, i) in activeProject.pendencias" :key="i">{{ pend }}</li>
+                </ul>
+                <span>Resolva na tela de Ocorrências para liberar as próximas etapas e a Ordem de Serviço.</span>
+              </div>
+
               <!-- BLOCO DE ETAPAS DENTRO DO CHECKLIST -->
               <div class="stages-box">
                 <div class="stages-top-bar">
@@ -574,7 +609,7 @@ onMounted(() => {
                     v-for="(etapa, idx) in etapasChecklist"
                     :key="etapa.codigo"
                     type="button"
-                    :disabled="salvando"
+                    :disabled="salvando || (projetoBloqueado && idx > etapaAtualIndex)"
                     :class="[
                       'step-node',
                       {
@@ -616,13 +651,13 @@ onMounted(() => {
                       v-if="etapaAtualObj.proximaEtapa"
                       type="button"
                       class="btn-complete-stage"
-                      :disabled="salvando"
+                      :disabled="salvando || projetoBloqueado"
                       @click="avancarParaEtapa(etapaAtualObj.proximaEtapa, etapaAtualObj.titulo)"
                     >
                       <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
-                      <span>{{ salvando ? 'Salvando...' : etapaAtualObj.botaoConcluir }}</span>
+                      <span>{{ salvando ? 'Salvando...' : projetoBloqueado ? 'Bloqueado por ocorrência' : etapaAtualObj.botaoConcluir }}</span>
                     </button>
 
                     <span v-else class="completed-tag">
@@ -726,7 +761,7 @@ onMounted(() => {
                 <button type="button" class="btn-draft" :disabled="salvando" @click="salvarRascunho">
                   Salvar Rascunho
                 </button>
-                <button type="button" class="btn-os" :disabled="salvando" @click="gerarOrdemServico">
+                <button type="button" class="btn-os" :disabled="salvando || projetoBloqueado" @click="gerarOrdemServico">
                   <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 9v4h2l-3 3-3-3h2v-4h2zm1-3V3.5L18.5 8H14z" />
                   </svg>
@@ -1670,6 +1705,29 @@ onMounted(() => {
   margin: 2px 0 0;
   font-size: 10px;
   color: #9CA3AF;
+}
+
+/* Trava por ocorrência */
+.block-alert {
+  margin-top: 20px;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: 14px;
+  padding: 14px 18px;
+  font-size: 12px;
+  color: #991B1B;
+}
+
+.block-alert ul {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+
+.step-node:disabled,
+.btn-complete-stage:disabled,
+.btn-os:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Responsividade */
