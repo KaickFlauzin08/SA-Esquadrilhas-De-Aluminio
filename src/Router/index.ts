@@ -19,6 +19,23 @@ import EquipesView from '../Views/EquipesVIew.vue'
 import TecnicosView from '../Views/TecnicosView.vue'
 import NovoCadastroView from '../Views/NovoCadastro.vue'
 
+// Telas exclusivas da experiência mobile
+import AgendaView from '../Views/Mobile/AgendaView.vue'
+import DetalhesOSView from '../Views/Mobile/DetalhesOSView.vue'
+import ExecucaoOSView from '../Views/Mobile/ExecucaoOSView.vue'
+import OcorrenciaOSView from '../Views/Mobile/OcorrenciaOSView.vue'
+import FinalizacaoOSView from '../Views/Mobile/FinalizacaoOSView.vue'
+import PendenciaOSView from '../Views/Mobile/PendenciaOSView.vue'
+
+const LIMITE_MOBILE = 768
+
+function destinoInicial(role: string | null): string {
+  if (typeof window !== 'undefined' && window.innerWidth <= LIMITE_MOBILE) {
+    return '/agenda'
+  }
+
+  return role === 'GESTOR' ? '/home' : '/projetos'
+}
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -83,6 +100,45 @@ const router = createRouter({
       component: TecnicosView,
       meta: { roles: ['GESTOR'] }
     },
+
+    // Fluxo mobile do técnico de campo
+    {
+      path: '/agenda',
+      name: 'Agenda',
+      component: AgendaView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+    {
+      path: '/agenda/os/:id',
+      name: 'DetalhesOS',
+      component: DetalhesOSView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+    {
+      path: '/agenda/os/:id/execucao',
+      name: 'ExecucaoOS',
+      component: ExecucaoOSView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+    {
+      path: '/agenda/os/:id/ocorrencia',
+      name: 'OcorrenciaOS',
+      component: OcorrenciaOSView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+    {
+      path: '/agenda/os/:id/finalizacao',
+      name: 'FinalizacaoOS',
+      component: FinalizacaoOSView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+    {
+      path: '/agenda/os/:id/pendencia',
+      name: 'PendenciaOS',
+      component: PendenciaOSView,
+      meta: { roles: ['GESTOR', 'TECNICO_CAMPO'] }
+    },
+
     {
       path: '/:pathMatch(.*)*',
       redirect: '/'
@@ -94,25 +150,19 @@ router.beforeEach((to) => {
   const logado = isAutenticado()
   const role = getRole()
 
-  // 1. Se a rota é pública (Login)
+  // Se tentar abrir o login já autenticado, envia para a área adequada.
   if (to.meta.publica) {
-    if (logado) {
-      return role === 'GESTOR' ? '/home' : '/projetos'
-    }
-    return true
+    return logado ? destinoInicial(role) : true
   }
 
-  // 2. Se não está autenticado, manda para o Login (evitando redirecionar se já estiver lá)
+  // Rotas privadas exigem sessão.
   if (!logado) {
     return to.path !== '/' ? '/' : true
   }
 
-  // 3. Verifica permissão de role sem gerar loop caso já esteja em '/projetos'
+  // Confere a permissão exigida pela rota.
   if (to.meta.roles && (!role || !to.meta.roles.includes(role))) {
-    if (to.path !== '/projetos') {
-      return '/projetos'
-    }
-    return '/'
+    return destinoInicial(role)
   }
 
   return true

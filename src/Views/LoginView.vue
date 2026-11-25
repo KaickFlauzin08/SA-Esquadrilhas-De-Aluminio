@@ -117,7 +117,7 @@ async function entrar() {
 
     // ---------- PASSO 4: guardar a sessão ----------
     try {
-      setSessao(tokenRecebido, usuarioRecebido)
+      setSessao(tokenRecebido, usuarioRecebido, lembrar.value)
     } catch (e) {
       console.error('Erro dentro do setSessao (utils/auth.ts):', e)
       erro.value = 'O login deu certo, mas falhou ao salvar a sessão (veja o Console).'
@@ -126,7 +126,15 @@ async function entrar() {
 
     // ---------- PASSO 5: ir para a próxima tela ----------
     const role = String(usuarioRecebido.roles ?? '').trim().toUpperCase() || 'TECNICO_CAMPO'
-    const destino = role === 'GESTOR' ? '/home' : '/projetos'
+    const celular = window.innerWidth <= 768
+
+    let destino = '/projetos'
+
+    if (celular) {
+      destino = '/agenda'
+    } else if (role === 'GESTOR') {
+      destino = '/home'
+    }
 
     try {
       const falha = await router.replace(destino)
