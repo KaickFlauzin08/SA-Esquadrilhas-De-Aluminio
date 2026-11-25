@@ -28,6 +28,7 @@ function abrirPerfil() {
   perfilAberto.value = true
 }
 
+
 function abrirSair() {
   menuAberto.value = false
   sairAberto.value = true
