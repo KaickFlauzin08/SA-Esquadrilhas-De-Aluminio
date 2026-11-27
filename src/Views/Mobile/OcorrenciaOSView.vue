@@ -1,23 +1,78 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { criarOcorrencia, lerFoto } from '../../services/api'
 
 const router = useRouter()
 const route = useRoute()
-import { ref } from 'vue'
-const tipo = ref('Material com defeito')
+const id = Number(route.params.id)
+
+// Os valores (MATERIAL, TECNICA...) são os que a API e o painel web já usam
+const tipos = [
+  { valor: 'MATERIAL', rotulo: 'Material com defeito ou faltando' },
+  { valor: 'TECNICA', rotulo: 'Problema técnico / erro de medida' },
+  { valor: 'EMBARGO', rotulo: 'Obra embargada / sem acesso' },
+  { valor: 'CLIENTE', rotulo: 'Problema com o cliente' },
+]
+const severidades = [
+  { valor: 'BAIXA', rotulo: 'Baixa' },
+  { valor: 'MEDIA', rotulo: 'Média' },
+  { valor: 'ALTA', rotulo: 'Alta' },
+  { valor: 'CRITICA', rotulo: 'Crítica' },
+]
+
+const titulo = ref('')
+const tipo = ref('MATERIAL')
+const severidade = ref('MEDIA')
 const descricao = ref('')
-const fotos = ref<File[]>([])
-function selecionarFotos(event: Event) {
-  const input = event.target as HTMLInputElement
-  fotos.value = Array.from(input.files || [])
+const bloqueiaObra = ref(false)
+const foto = ref<string | null>(null)
+const salvando = ref(false)
+const erro = ref('')
+
+// Embargo sempre bloqueia a obra
+watch(tipo, (v) => {
+  if (v === 'EMBARGO') bloqueiaObra.value = true
+})
+
+async function selecionarFoto(evento: Event) {
+  const input = evento.target as HTMLInputElement
+  const arquivo = input.files?.[0]
+  if (!arquivo) return
+  erro.value = ''
+  try {
+    foto.value = await lerFoto(arquivo)
+  } catch (e) {
+    foto.value = null
+    erro.value = e instanceof Error ? e.message : 'Não foi possível ler a foto.'
+  }
 }
-function salvar() {
-  if (!descricao.value.trim()) {
-    window.alert('Descreva o problema antes de salvar.')
+
+async function salvar() {
+  erro.value = ''
+  if (!titulo.value.trim() || !descricao.value.trim()) {
+    erro.value = 'Informe o título e a descrição do problema.'
     return
   }
-  window.alert('Ocorrência preenchida nesta tela. A gravação definitiva depende da integração com a API.')
-  router.push({ name: 'ExecucaoOS', params: { id: route.params.id } })
+
+  salvando.value = true
+  try {
+    await criarOcorrencia({
+      projetoId: id,
+      titulo: titulo.value,
+      tipo: tipo.value,
+      severidade: severidade.value,
+      descricao: descricao.value,
+      fotoUrl: foto.value,
+      bloqueiaObra: bloqueiaObra.value,
+    })
+    // Se bloqueou a obra, vai para a pendência; senão volta para a execução
+    router.replace({ name: bloqueiaObra.value ? 'PendenciaOS' : 'ExecucaoOS', params: { id } })
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Não foi possível salvar a ocorrência.'
+  } finally {
+    salvando.value = false
+  }
 }
 </script>
 
@@ -28,34 +83,51 @@ function salvar() {
         <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
         <div>
           <h1>Registro de Ocorrência</h1>
-          <p>OS # - Relato de problema</p>
+          <p>OS #{{ id }} - Relato de problema</p>
         </div>
       </div>
     </header>
     <section class="content">
-      
       <div class="card">
         <h2>Registro de ocorrência</h2>
         <p class="muted">Informe o problema encontrado durante a execução da ordem de serviço.</p>
+
+        <label for="titulo">Título *</label>
+        <input id="titulo" class="field" v-model="titulo" maxlength="100" placeholder="Ex.: Vidro da janela trincado" />
+
         <label for="tipo">Tipo de ocorrência *</label>
         <select id="tipo" class="field" v-model="tipo">
-          <option>Material com defeito</option>
-          <option>Erro de medida</option>
-          <option>Atraso na entrega</option>
-          <option>Outro</option>
+          <option v-for="t in tipos" :key="t.valor" :value="t.valor">{{ t.rotulo }}</option>
         </select>
+
+        <label for="severidade">Gravidade *</label>
+        <select id="severidade" class="field" v-model="severidade">
+          <option v-for="s in severidades" :key="s.valor" :value="s.valor">{{ s.rotulo }}</option>
+        </select>
+
         <label for="descricao">Descrição do problema *</label>
         <textarea id="descricao" class="field" v-model="descricao" placeholder="Descreva detalhadamente o ocorrido..."></textarea>
-      </div>
-      <div class="card">
-        <h3>Evidências (fotos)</h3>
-        <p class="muted">Selecione fotos para documentar a ocorrência.</p>
-        <input class="field" type="file" accept="image/*" multiple capture="environment" @change="selecionarFotos">
-        <p class="muted">{{ fotos.length }} arquivo(s) selecionado(s)</p>
-      </div>
-      <div class="notice warning">⚠️ Registre informações verdadeiras e imagens relacionadas à ocorrência.</div>
-      <div class="actions"><button class="danger" @click="salvar">Salvar ocorrência ✓</button></div>
 
+        <label class="item" style="margin:12px 0 0;padding:0;border:0;cursor:pointer;font-size:12px">
+          <input class="check" type="checkbox" v-model="bloqueiaObra" :disabled="tipo === 'EMBARGO'" />
+          <span style="font-weight:600">Este problema impede a continuação da obra</span>
+        </label>
+      </div>
+
+      <div class="card">
+        <h3>Evidência (foto)</h3>
+        <p class="muted">Tire ou selecione uma foto para documentar a ocorrência.</p>
+        <input class="field" type="file" accept="image/*" capture="environment" @change="selecionarFoto" />
+        <img v-if="foto" :src="foto" alt="Pré-visualização da foto" style="width:100%;border-radius:11px;margin-top:10px" />
+      </div>
+
+      <div class="notice warning">⚠️ Registre informações verdadeiras e imagens relacionadas à ocorrência.</div>
+
+      <div v-if="erro" class="erro" style="margin-top:13px">{{ erro }}</div>
+
+      <div class="actions">
+        <button class="danger" :disabled="salvando" @click="salvar">{{ salvando ? 'Salvando...' : 'Salvar ocorrência ✓' }}</button>
+      </div>
     </section>
   </main>
 </template>
@@ -96,5 +168,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 

@@ -1,44 +1,126 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { carregarObra, dataBR, notificarSuporte, resolverOcorrencia, type ObraCompleta } from '../../services/api'
 
 const router = useRouter()
 const route = useRoute()
-const motivo = 'Aguardando a chegada de materiais adicionais para finalizar o trecho. Previsão de entrega informada pelo fornecedor: amanhã às 09:00.'
-function notificar() {
-  window.alert('A solicitação de suporte precisa ser conectada ao serviço de atendimento da API.')
+const id = Number(route.params.id)
+
+const obra = ref<ObraCompleta | null>(null)
+const carregando = ref(true)
+const trabalhando = ref(false)
+const erro = ref('')
+const aviso = ref('')
+const solucao = ref('')
+
+const pendencias = computed(() => obra.value?.abertas ?? [])
+const suporteJaChamado = computed(() => pendencias.value.some((o) => o.titulo.startsWith('Suporte solicitado')))
+
+async function carregar() {
+  carregando.value = true
+  erro.value = ''
+  try {
+    obra.value = await carregarObra(id)
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Erro ao carregar a pendência.'
+  } finally {
+    carregando.value = false
+  }
 }
+
+async function resolver(ocorrenciaId: number) {
+  trabalhando.value = true
+  erro.value = ''
+  aviso.value = ''
+  try {
+    await resolverOcorrencia(ocorrenciaId, solucao.value)
+    solucao.value = ''
+    obra.value = await carregarObra(id)
+    aviso.value = 'Pendência marcada como resolvida.'
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Não foi possível resolver a pendência.'
+  } finally {
+    trabalhando.value = false
+  }
+}
+
+async function notificar() {
+  const principal = pendencias.value.find((o) => !o.titulo.startsWith('Suporte solicitado'))
+  trabalhando.value = true
+  erro.value = ''
+  aviso.value = ''
+  try {
+    await notificarSuporte(id, principal ? `Motivo: ${principal.titulo} — ${principal.descricao}` : '')
+    obra.value = await carregarObra(id)
+    aviso.value = 'Suporte notificado. O gestor verá o chamado no painel de ocorrências.'
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Não foi possível notificar o suporte.'
+  } finally {
+    trabalhando.value = false
+  }
+}
+
+onMounted(carregar)
 </script>
 
 <template>
   <main class="mobile-page">
     <header class="top">
       <div class="topline">
-        <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
+        <button class="back" type="button" aria-label="Voltar" @click="router.push('/agenda')">‹</button>
         <div>
-          <h1>Finalização de Obra</h1>
+          <h1>Pendência da OS</h1>
           <p>Acompanhamento de pendência</p>
         </div>
       </div>
     </header>
     <section class="content">
-      
-      <div class="card" style="text-align:center;padding:24px 16px">
-        <div style="font-size:38px">⌛</div>
-        <h2>Aguardando resolução</h2>
-        <span class="pill" style="background:#fff3dc;color:#a66a00">Pendente</span>
-      </div>
-      <div class="card">
-        <div class="row"><span class="eyebrow">Ordem de serviço</span><strong>#{{ route.params.id }}</strong></div>
-        <div class="item"><span class="step-icon">♙</span><div><span class="eyebrow">Cliente</span><strong>Condomínio Solar das Palmeiras</strong></div></div>
-        <div class="item"><span class="step-icon">▦</span><div><span class="eyebrow">Data e hora</span><strong>24 de outubro, 14:30h</strong></div></div>
-        <div class="notice" style="margin-top:14px"><strong>Motivo da pendência</strong><br>{{ motivo }}</div>
-      </div>
-      <div class="actions">
-        <button class="primary" @click="router.push({ name: 'DetalhesOS', params: { id: route.params.id } })">⌕ Ver detalhes da pendência</button>
-        <button class="secondary" @click="notificar">♧ Notificar suporte</button>
-        <button class="secondary" @click="router.push('/agenda')">Voltar para agenda</button>
+      <p v-if="carregando" class="feedback">Carregando...</p>
+
+      <div v-else-if="!obra" class="erro">
+        {{ erro || 'Obra não encontrada.' }}
+        <button class="secondary" @click="carregar">Tentar novamente</button>
       </div>
 
+      <template v-else>
+        <div class="card" style="text-align:center;padding:24px 16px">
+          <div style="font-size:38px">{{ pendencias.length ? '⌛' : '✓' }}</div>
+          <h2>{{ pendencias.length ? 'Aguardando resolução' : 'Sem pendências' }}</h2>
+          <span class="pill" :class="pendencias.length ? 'pill-warn' : ''">{{ pendencias.length ? 'Pendente' : 'Tudo certo' }}</span>
+        </div>
+
+        <div v-if="erro" class="erro">{{ erro }}</div>
+        <div v-if="aviso" class="notice success" style="margin-bottom:13px">{{ aviso }}</div>
+
+        <div class="card">
+          <div class="row"><span class="eyebrow">Ordem de serviço</span><strong>#{{ id }}</strong></div>
+          <div class="item"><span class="step-icon">♙</span><div><span class="eyebrow">Cliente</span><br /><strong>{{ obra.orcamento?.nomeCliente ?? `Obra #${id}` }}</strong></div></div>
+
+          <div v-for="p in pendencias" :key="p.id" class="notice" style="margin-top:14px">
+            <strong>{{ p.titulo }}</strong>
+            <span class="muted"> · {{ p.severidade }} · {{ dataBR(p.dataAbertura) }}</span><br />
+            {{ p.descricao }}
+            <img v-if="p.fotoUrl" :src="p.fotoUrl" alt="Foto da ocorrência" style="width:100%;border-radius:11px;margin-top:8px" />
+            <button class="secondary" :disabled="trabalhando" @click="resolver(p.id)">Marcar como resolvida</button>
+          </div>
+
+          <template v-if="pendencias.length">
+            <label for="solucao">Solução aplicada (opcional)</label>
+            <textarea id="solucao" class="field" style="min-height:70px" v-model="solucao" placeholder="Descreva o que foi feito para resolver..."></textarea>
+          </template>
+        </div>
+
+        <div class="actions">
+          <button class="primary" @click="router.push({ name: pendencias.length ? 'DetalhesOS' : 'ExecucaoOS', params: { id } })">
+            {{ pendencias.length ? '⌕ Ver detalhes da OS' : '▶ Continuar execução' }}
+          </button>
+          <button v-if="pendencias.length" class="secondary" :disabled="trabalhando || suporteJaChamado" @click="notificar">
+            {{ suporteJaChamado ? '♧ Suporte já notificado' : '♧ Notificar suporte' }}
+          </button>
+          <button class="secondary" @click="router.push('/agenda')">Voltar para agenda</button>
+        </div>
+      </template>
     </section>
   </main>
 </template>
@@ -79,5 +161,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 

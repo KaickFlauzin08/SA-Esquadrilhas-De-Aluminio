@@ -1,22 +1,54 @@
 <script setup lang="ts">
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { dataBR, listarObras, type Obra } from '../../services/api'
+import { getUsuario, logout } from '../../utils/auth'
 
 const router = useRouter()
-const route = useRoute()
-const ordens = [
-  { id: '8921', titulo: 'Residencial Marina Lins', cliente: 'Marina Lins', horario: '08:30', endereco: 'Barra da Tijuca, RJ', status: 'Programada' },
-  { id: '8842', titulo: 'Condomínio Solar das Palmeiras', cliente: 'Solar das Palmeiras', horario: '14:30', endereco: 'Rio de Janeiro, RJ', status: 'Pendente' }
-]
-function abrir(id: string) {
-  router.push({ name: 'DetalhesOS', params: { id } })
+const obras = ref<Obra[]>([])
+const carregando = ref(true)
+const erro = ref('')
+
+const primeiroNome = computed(() => (getUsuario()?.nome || 'técnico').trim().split(/\s+/)[0] ?? 'técnico')
+const ativas = computed(() => obras.value.filter((o) => !o.concluida))
+const concluidas = computed(() => obras.value.filter((o) => o.concluida))
+
+async function carregar() {
+  carregando.value = true
+  erro.value = ''
+  try {
+    obras.value = await listarObras()
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Erro ao carregar a agenda.'
+  } finally {
+    carregando.value = false
+  }
 }
+
+function classePill(o: Obra) {
+  if (o.concluida) return 'pill-gray'
+  if (o.pendente) return 'pill-warn'
+  return ''
+}
+
+// Obra com problema aberto vai direto para a tela de pendência
+function abrir(o: Obra) {
+  router.push({ name: o.pendente ? 'PendenciaOS' : 'DetalhesOS', params: { id: o.id } })
+}
+
+function sair() {
+  logout()
+  router.replace('/')
+}
+
+onMounted(carregar)
 </script>
 
 <template>
   <main class="mobile-page">
     <header class="top">
       <div class="topline">
-        <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
+        <button class="back" type="button" aria-label="Sair" @click="sair">⏻</button>
         <div>
           <h1>Agenda</h1>
           <p>Ordens de serviço programadas</p>
@@ -24,21 +56,46 @@ function abrir(id: string) {
       </div>
     </header>
     <section class="content">
-      
       <div class="card">
-        <div class="row"><span class="eyebrow">Olá, técnico</span><span class="pill">Dia de trabalho</span></div>
+        <div class="row"><span class="eyebrow">Olá, {{ primeiroNome }}</span><span class="pill">Dia de trabalho</span></div>
         <h2>Agenda de serviços</h2>
         <p class="muted">Acompanhe suas ordens de serviço e selecione uma para consultar os detalhes.</p>
       </div>
-      <div class="row" style="margin:16px 2px 9px"><h3>Ordens de serviço</h3><span class="muted">2 serviços</span></div>
-      <article v-for="os in ordens" :key="os.id" class="card os-card" @click="abrir(os.id)">
-        <div class="row"><span class="eyebrow">OS #{{ os.id }}</span><span class="pill">{{ os.status }}</span></div>
-        <div class="os-title">{{ os.titulo }}</div>
-        <div class="meta">◷ {{ os.horario }} <span>•</span> ♧ {{ os.cliente }}</div>
-        <div class="meta">⌖ {{ os.endereco }}</div>
-        <button class="primary" style="margin-top:14px" @click.stop="abrir(os.id)">Ver ordem de serviço →</button>
-      </article>
 
+      <p v-if="carregando" class="feedback">Carregando ordens de serviço...</p>
+
+      <div v-else-if="erro" class="erro">
+        {{ erro }}
+        <button class="secondary" @click="carregar">Tentar novamente</button>
+      </div>
+
+      <template v-else>
+        <div class="row" style="margin:16px 2px 9px">
+          <h3>Ordens de serviço</h3>
+          <span class="muted">{{ ativas.length }} {{ ativas.length === 1 ? 'serviço' : 'serviços' }}</span>
+        </div>
+
+        <p v-if="ativas.length === 0" class="feedback">Nenhuma ordem de serviço atribuída a você. Peça ao gestor para designar você ao projeto.</p>
+
+        <article v-for="os in ativas" :key="os.id" class="card os-card" @click="abrir(os)">
+          <div class="row"><span class="eyebrow">OS #{{ os.id }}</span><span class="pill" :class="classePill(os)">{{ os.rotulo }}</span></div>
+          <div class="os-title">{{ os.cliente }}</div>
+          <div class="meta">◷ Prazo: {{ dataBR(os.prazo) }}</div>
+          <div class="meta">⌖ {{ os.endereco }}</div>
+          <button class="primary" style="margin-top:14px" @click.stop="abrir(os)">
+            {{ os.pendente ? 'Ver pendência →' : 'Ver ordem de serviço →' }}
+          </button>
+        </article>
+
+        <template v-if="concluidas.length">
+          <div class="row" style="margin:22px 2px 9px"><h3>Concluídas</h3><span class="muted">{{ concluidas.length }}</span></div>
+          <article v-for="os in concluidas" :key="os.id" class="card os-card" @click="abrir(os)">
+            <div class="row"><span class="eyebrow">OS #{{ os.id }}</span><span class="pill pill-gray">{{ os.rotulo }}</span></div>
+            <div class="os-title">{{ os.cliente }}</div>
+            <div class="meta">⌖ {{ os.endereco }}</div>
+          </article>
+        </template>
+      </template>
     </section>
   </main>
 </template>
@@ -79,5 +136,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 
