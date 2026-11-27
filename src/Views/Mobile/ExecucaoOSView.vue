@@ -1,24 +1,96 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  carregarObra,
+  iniciarExecucao,
+  marcarItemInstalado,
+  podeExecutar,
+  type ItemOrcamento,
+  type ObraCompleta,
+} from '../../services/api'
 
 const router = useRouter()
 const route = useRoute()
-import { computed, reactive } from 'vue'
-const checklist = reactive([
-  { nome: 'Vedação de vidros e esquadrias', descricao: 'Conferir vedação e acabamento', ok: false },
-  { nome: 'Ajuste de dobradiças e fechaduras', descricao: 'Testar abertura e fechamento', ok: false },
-  { nome: 'Limpeza dos perfis de alumínio', descricao: 'Limpeza após a instalação', ok: false }
+const id = Number(route.params.id)
+
+const obra = ref<ObraCompleta | null>(null)
+const carregando = ref(true)
+const erro = ref('')
+const salvandoId = ref<number | null>(null)
+
+const status = computed(() => obra.value?.projeto.statusProducao ?? '')
+const liberado = computed(() => podeExecutar(status.value) && !obra.value?.bloqueada)
+
+const checklist = computed(() =>
+  (obra.value?.itens ?? []).map((item) => ({
+    item,
+    ok: obra.value?.instalados.includes(item.id) ?? false,
+  })),
+)
+const concluidos = computed(() => checklist.value.filter((c) => c.ok).length)
+const todosOk = computed(() => concluidos.value === checklist.value.length)
+
+const etapas = computed(() => [
+  { titulo: 'Início', texto: 'Conferência e preparação do local.', ok: status.value === 'EM_INSTALACAO' || status.value === 'CONCLUIDO' },
+  { titulo: 'Andamento', texto: 'Instalação dos materiais liberados.', ok: concluidos.value > 0 },
+  { titulo: 'Conclusão', texto: 'Registro final e conferência do serviço.', ok: status.value === 'CONCLUIDO' },
 ])
-const concluidos = computed(() => checklist.filter(item => item.ok).length)
-function registrarOcorrencia() { router.push({ name: 'OcorrenciaOS', params: { id: route.params.id } }) }
-function finalizar() { router.push({ name: 'FinalizacaoOS', params: { id: route.params.id } }) }
+
+async function carregar() {
+  carregando.value = true
+  erro.value = ''
+  try {
+    let dados = await carregarObra(id)
+    // Ao abrir a execução de uma obra liberada, ela passa para "Em instalação"
+    if (dados.projeto.statusProducao === 'LIBERADO' && !dados.bloqueada) {
+      await iniciarExecucao(dados.projeto)
+      dados = await carregarObra(id)
+    }
+    obra.value = dados
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Erro ao carregar a execução.'
+  } finally {
+    carregando.value = false
+  }
+}
+
+// Cada item marcado é gravado na hora (RegistroObra). Depois de salvo, não desmarca.
+async function marcar(item: ItemOrcamento, evento: Event) {
+  const caixa = evento.target as HTMLInputElement
+  if (!obra.value || salvandoId.value !== null) {
+    caixa.checked = false
+    return
+  }
+  salvandoId.value = item.id
+  erro.value = ''
+  try {
+    await marcarItemInstalado(id, item)
+    obra.value.instalados.push(item.id)
+  } catch (e) {
+    caixa.checked = false
+    erro.value = e instanceof Error ? e.message : 'Não foi possível salvar o item.'
+  } finally {
+    salvandoId.value = null
+  }
+}
+
+function registrarOcorrencia() {
+  router.push({ name: 'OcorrenciaOS', params: { id } })
+}
+
+function finalizar() {
+  router.push({ name: 'FinalizacaoOS', params: { id } })
+}
+
+onMounted(carregar)
 </script>
 
 <template>
   <main class="mobile-page">
     <header class="top">
       <div class="topline">
-        <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
+        <button class="back" type="button" aria-label="Voltar" @click="router.push({ name: 'DetalhesOS', params: { id } })">‹</button>
         <div>
           <h1>Execução do Serviço</h1>
           <p>Acompanhamento da instalação</p>
@@ -26,35 +98,71 @@ function finalizar() { router.push({ name: 'FinalizacaoOS', params: { id: route.
       </div>
     </header>
     <section class="content">
-      
-      <div class="card">
-        <div class="row"><span class="eyebrow">OS #{{ route.params.id }}</span><span class="pill">Em execução</span></div>
-        <h2>Execução do serviço</h2>
-        <p class="muted">Registre problemas, confira os itens e acompanhe as etapas da obra.</p>
-      </div>
-      <div class="card">
-        <div class="row"><h3>Relatar problema inicial</h3><span class="eyebrow">Opcional</span></div>
-        <p class="muted">Encontrou algum problema antes de começar?</p>
-        <button class="danger" @click="registrarOcorrencia">⚠ Relatar ocorrência</button>
-      </div>
-      <div class="card">
-        <div class="row"><h3>Checklist de itens</h3><span class="muted">{{ concluidos }}/{{ checklist.length }} concluídos</span></div>
-        <div v-for="(item, index) in checklist" :key="item.nome" class="item">
-          <input class="check" type="checkbox" v-model="item.ok">
-          <div><strong>{{ item.nome }}</strong><div class="muted">{{ item.descricao }}</div></div>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Etapas da obra</h3>
-        <div class="item"><span class="step-icon">1</span><div><strong>Início</strong><p class="muted">Conferência e preparação do local.</p></div></div>
-        <div class="item"><span class="step-icon">2</span><div><strong>Andamento</strong><p class="muted">Instalação dos materiais liberados.</p></div></div>
-        <div class="item"><span class="step-icon">3</span><div><strong>Conclusão</strong><p class="muted">Registro final e conferência do serviço.</p></div></div>
-      </div>
-      <div class="actions">
-        <p v-if="concluidos !== checklist.length" class="muted warning" style="padding:9px;border-radius:9px">Conclua todos os itens do checklist antes de finalizar.</p>
-        <button class="primary" :disabled="concluidos !== checklist.length" @click="finalizar">Finalizar instalação ✓</button>
+      <p v-if="carregando" class="feedback">Carregando...</p>
+
+      <div v-else-if="!obra" class="erro">
+        {{ erro || 'Obra não encontrada.' }}
+        <button class="secondary" @click="carregar">Tentar novamente</button>
       </div>
 
+      <template v-else>
+        <div class="card">
+          <div class="row">
+            <span class="eyebrow">OS #{{ id }}</span>
+            <span class="pill" :class="status === 'CONCLUIDO' ? 'pill-gray' : ''">{{ status === 'CONCLUIDO' ? 'Concluída' : 'Em execução' }}</span>
+          </div>
+          <h2>Execução do serviço</h2>
+          <p class="muted">Registre problemas, confira os itens e acompanhe as etapas da obra.</p>
+        </div>
+
+        <div v-if="erro" class="erro">{{ erro }}</div>
+
+        <div v-if="obra.bloqueada" class="notice warning" style="margin-bottom:13px">
+          <strong>Obra bloqueada por uma ocorrência em aberto.</strong>
+          <button class="secondary" @click="router.push({ name: 'PendenciaOS', params: { id } })">Ver pendência</button>
+        </div>
+        <div v-else-if="!liberado && status !== 'CONCLUIDO'" class="notice" style="margin-bottom:13px">
+          Esta obra ainda não foi liberada para instalação.
+        </div>
+
+        <div class="card">
+          <div class="row"><h3>Relatar problema</h3><span class="eyebrow">Opcional</span></div>
+          <p class="muted">Encontrou algum problema durante o serviço?</p>
+          <button class="danger" @click="registrarOcorrencia">⚠ Relatar ocorrência</button>
+        </div>
+
+        <div class="card">
+          <div class="row"><h3>Checklist de itens</h3><span class="muted">{{ concluidos }}/{{ checklist.length }} concluídos</span></div>
+          <p v-if="checklist.length === 0" class="muted">Nenhum item cadastrado no orçamento desta obra.</p>
+          <label v-for="c in checklist" :key="c.item.id" class="item" style="margin:0;cursor:pointer;font-size:13px;font-weight:400">
+            <input
+              class="check"
+              type="checkbox"
+              :checked="c.ok"
+              :disabled="c.ok || !liberado || salvandoId !== null"
+              @change="marcar(c.item, $event)"
+            />
+            <div>
+              <strong>{{ c.item.quantidade }}x {{ c.item.descricaoItem }}</strong>
+              <div class="muted">{{ c.item.largura }} × {{ c.item.altura }} mm<template v-if="c.item.tipoAbertura"> · {{ c.item.tipoAbertura }}</template></div>
+              <div v-if="salvandoId === c.item.id" class="muted">Salvando...</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="card">
+          <h3>Etapas da obra</h3>
+          <div class="item" v-for="(etapa, i) in etapas" :key="etapa.titulo">
+            <span class="step-icon">{{ etapa.ok ? '✓' : i + 1 }}</span>
+            <div><strong>{{ etapa.titulo }}</strong><p class="muted">{{ etapa.texto }}</p></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <p v-if="!todosOk" class="muted warning" style="padding:9px;border-radius:9px">Conclua todos os itens do checklist antes de finalizar.</p>
+          <button class="primary" :disabled="!todosOk || !liberado" @click="finalizar">Finalizar instalação ✓</button>
+        </div>
+      </template>
     </section>
   </main>
 </template>
@@ -95,5 +203,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 

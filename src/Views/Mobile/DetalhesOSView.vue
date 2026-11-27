@@ -1,19 +1,69 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { carregarObra, dataBR, podeExecutar, rotuloStatus, type ObraCompleta } from '../../services/api'
 
 const router = useRouter()
 const route = useRoute()
-const itens = ['Porta de entrada', 'Janela de correr (sala)', 'Maxim-ar (banheiro)']
-function iniciar() { router.push({ name: 'ExecucaoOS', params: { id: route.params.id } }) }
-function abrirMapa() { window.open('https://www.google.com/maps/search/?api=1&query=Barra+da+Tijuca+RJ', '_blank') }
-function mensagemDocumentos() { window.alert('A visualização dos documentos será conectada à API do projeto.') }
+const id = Number(route.params.id)
+
+const obra = ref<ObraCompleta | null>(null)
+const carregando = ref(true)
+const erro = ref('')
+
+const status = computed(() => obra.value?.projeto.statusProducao ?? '')
+const cliente = computed(() => obra.value?.orcamento?.nomeCliente ?? `Obra #${id}`)
+const endereco = computed(() => obra.value?.orcamento?.enderecoObra || 'Endereço não informado')
+
+// Tempo que o técnico tem para fazer o serviço (até o prazo final do projeto)
+const prazoTexto = computed(() => {
+  const prazo = obra.value?.projeto.prazoFinalEntrega
+  if (!prazo) return 'Prazo não definido'
+  const dias = Math.ceil((new Date(prazo).getTime() - Date.now()) / 86400000)
+  if (Number.isNaN(dias)) return 'Prazo não definido'
+  if (dias < 0) return `Prazo vencido há ${-dias} ${-dias === 1 ? 'dia' : 'dias'}`
+  if (dias === 0) return 'Vence hoje'
+  return `${dias} ${dias === 1 ? 'dia restante' : 'dias restantes'}`
+})
+
+// Texto e estado do botão principal, conforme a situação da obra
+const acao = computed(() => {
+  if (status.value === 'CONCLUIDO') return { texto: 'Serviço concluído', ativo: false }
+  if (obra.value?.bloqueada) return { texto: 'Obra bloqueada por pendência', ativo: false }
+  if (status.value === 'EM_INSTALACAO') return { texto: '▶ Continuar execução', ativo: true }
+  if (status.value === 'LIBERADO') return { texto: '▶ Iniciar execução', ativo: true }
+  return { texto: 'Aguardando liberação', ativo: false }
+})
+
+async function carregar() {
+  carregando.value = true
+  erro.value = ''
+  try {
+    obra.value = await carregarObra(id)
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Erro ao carregar a obra.'
+  } finally {
+    carregando.value = false
+  }
+}
+
+function iniciar() {
+  if (!podeExecutar(status.value)) return
+  router.push({ name: 'ExecucaoOS', params: { id } })
+}
+
+function abrirMapa() {
+  window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(endereco.value)}`, '_blank')
+}
+
+onMounted(carregar)
 </script>
 
 <template>
   <main class="mobile-page">
     <header class="top">
       <div class="topline">
-        <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
+        <button class="back" type="button" aria-label="Voltar" @click="router.push('/agenda')">‹</button>
         <div>
           <h1>Detalhes da OS</h1>
           <p>Informações da ordem de serviço</p>
@@ -21,29 +71,77 @@ function mensagemDocumentos() { window.alert('A visualização dos documentos se
       </div>
     </header>
     <section class="content">
-      
-      <div class="card">
-        <div class="row"><span class="eyebrow">Ordem de serviço</span><span class="pill">Programada</span></div>
-        <h2>#{{ route.params.id }} - Residencial Marina Lins</h2>
-        <p class="muted">Instalação de esquadrias de alumínio</p>
-      </div>
-      <div class="card">
-        <h3>⌖ Endereço da obra</h3>
-        <p class="muted">Rua das Orquídeas, 120 - Bloco B, Apto 402<br>Barra da Tijuca, RJ</p>
-        <button class="secondary" @click="abrirMapa">Abrir no GPS</button>
-      </div>
-      <div class="card">
-        <div class="row"><h3>Documentação</h3><span class="pill">Disponível</span></div>
-        <p class="muted">Documentos e orientações vinculados à ordem de serviço.</p>
-        <button class="secondary" @click="mensagemDocumentos">Ver projeto</button>
-      </div>
-      <div class="card">
-        <div class="row"><h3>Itens liberados</h3><span class="pill">3 itens</span></div>
-        <div class="item" v-for="item in itens" :key="item"><span class="step-icon">✓</span><div><strong>{{ item }}</strong><div class="muted">Liberado para instalação</div></div></div>
-      </div>
-      <div class="card"><h3>Observações</h3><p class="muted">Confira os materiais e as condições do local antes de iniciar o serviço.</p></div>
-      <div class="actions"><button class="primary" @click="iniciar">▶ Iniciar execução</button></div>
+      <p v-if="carregando" class="feedback">Carregando...</p>
 
+      <div v-else-if="erro" class="erro">
+        {{ erro }}
+        <button class="secondary" @click="carregar">Tentar novamente</button>
+      </div>
+
+      <template v-else-if="obra">
+        <div class="card">
+          <div class="row"><span class="eyebrow">Ordem de serviço #{{ id }}</span><span class="pill">{{ rotuloStatus(status) }}</span></div>
+          <h2>{{ cliente }}</h2>
+          <p class="muted">Instalação de esquadrias de alumínio</p>
+        </div>
+
+        <div v-if="obra.bloqueada" class="notice warning" style="margin-bottom:13px">
+          <strong>Esta obra está bloqueada por uma ocorrência em aberto.</strong>
+          <button class="secondary" @click="router.push({ name: 'PendenciaOS', params: { id } })">Ver pendência</button>
+        </div>
+
+        <div class="card">
+          <h3>🛠 Serviço a ser feito</h3>
+          <p class="muted">{{ obra.liberacao?.escopoLiberado || 'Instalação das esquadrias listadas abaixo.' }}</p>
+          <div class="item">
+            <span class="step-icon">◷</span>
+            <div>
+              <strong>{{ prazoTexto }}</strong>
+              <div class="muted">Prazo final: {{ dataBR(obra.projeto.prazoFinalEntrega) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>⌖ Endereço da obra</h3>
+          <p class="muted">{{ endereco }}</p>
+          <button class="secondary" @click="abrirMapa">Abrir no GPS</button>
+        </div>
+
+        <div class="card" v-if="obra.orcamento">
+          <h3>♙ Cliente</h3>
+          <p class="muted">
+            <strong>{{ obra.orcamento.nomeCliente }}</strong><br />
+            <template v-if="obra.orcamento.telefoneCliente">Telefone: {{ obra.orcamento.telefoneCliente }}</template>
+          </p>
+          <a v-if="obra.orcamento.telefoneCliente" class="secondary" :href="`tel:${obra.orcamento.telefoneCliente}`">Ligar para o cliente</a>
+        </div>
+
+        <div class="card">
+          <div class="row"><h3>Peças a instalar</h3><span class="pill">{{ obra.itens.length }} {{ obra.itens.length === 1 ? 'item' : 'itens' }}</span></div>
+          <p v-if="obra.itens.length === 0" class="muted">Nenhuma peça cadastrada para esta obra.</p>
+          <div class="item" v-for="item in obra.itens" :key="item.id">
+            <span class="step-icon">{{ item.quantidade }}x</span>
+            <div>
+              <strong>{{ item.descricaoItem }}</strong>
+              <div class="muted">
+                {{ item.largura }} × {{ item.altura }} mm (largura × altura)
+                <template v-if="item.tipoAbertura"><br />Abertura: {{ item.tipoAbertura }}<template v-if="item.ladoAbertura"> · lado {{ item.ladoAbertura }}</template></template>
+                <template v-if="item.posicaoFechadura"><br />Fechadura: {{ item.posicaoFechadura }}</template>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" v-if="obra.liberacao?.observacoes">
+          <h3>Observações</h3>
+          <p class="muted">{{ obra.liberacao.observacoes }}</p>
+        </div>
+
+        <div class="actions">
+          <button class="primary" :disabled="!acao.ativo" @click="iniciar">{{ acao.texto }}</button>
+        </div>
+      </template>
     </section>
   </main>
 </template>
@@ -84,5 +182,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 

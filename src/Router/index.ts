@@ -164,6 +164,7 @@ router.beforeEach((to) => {
   if (to.meta.roles && (!role || !to.meta.roles.includes(role))) {
     return destinoInicial(role)
   }
+  console.log('[guard]', to.path, { logado, role, rotaExiste: to.matched.length > 0 })
 
   return true
 })

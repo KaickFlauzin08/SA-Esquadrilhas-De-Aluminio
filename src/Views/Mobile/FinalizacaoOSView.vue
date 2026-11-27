@@ -1,25 +1,67 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { carregarObra, concluirObra, type ObraCompleta } from '../../services/api'
 
 const router = useRouter()
 const route = useRoute()
-import { ref } from 'vue'
+const id = Number(route.params.id)
+
+const obra = ref<ObraCompleta | null>(null)
+const carregando = ref(true)
+const salvando = ref(false)
+const concluida = ref(false)
+const erro = ref('')
 const email = ref('')
-function concluir() {
+
+const total = computed(() => obra.value?.itens.length ?? 0)
+const feitos = computed(() => obra.value?.instalados.length ?? 0)
+const faltando = computed(() => total.value > 0 && feitos.value < total.value)
+const percentual = computed(() => (total.value === 0 ? 100 : Math.round((Math.min(feitos.value, total.value) / total.value) * 100)))
+
+async function carregar() {
+  carregando.value = true
+  erro.value = ''
+  try {
+    const dados = await carregarObra(id)
+    obra.value = dados
+    email.value = dados.orcamento?.emailCliente ?? ''
+    concluida.value = dados.projeto.statusProducao === 'CONCLUIDO'
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Erro ao carregar a obra.'
+  } finally {
+    carregando.value = false
+  }
+}
+
+async function concluir() {
+  if (!obra.value) return
+  erro.value = ''
+
   if (email.value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value)) {
-    window.alert('Informe um e-mail válido.')
+    erro.value = 'Informe um e-mail válido.'
     return
   }
-  window.alert('Resumo pronto. A conclusão definitiva e o envio do e-mail precisam ser conectados à API.')
-  router.push('/agenda')
+
+  salvando.value = true
+  try {
+    await concluirObra(obra.value, email.value)
+    concluida.value = true
+  } catch (e) {
+    erro.value = e instanceof Error ? e.message : 'Não foi possível concluir a ordem de serviço.'
+  } finally {
+    salvando.value = false
+  }
 }
+
+onMounted(carregar)
 </script>
 
 <template>
   <main class="mobile-page">
     <header class="top">
       <div class="topline">
-        <button class="back" type="button" aria-label="Voltar" @click="router.back()">‹</button>
+        <button class="back" type="button" aria-label="Voltar" @click="router.push({ name: 'ExecucaoOS', params: { id } })">‹</button>
         <div>
           <h1>Finalização de Obra</h1>
           <p>Conferência final do serviço</p>
@@ -27,28 +69,56 @@ function concluir() {
       </div>
     </header>
     <section class="content">
-      
-      <div class="card success" style="text-align:center;padding:25px 16px">
-        <div style="font-size:34px">✓</div>
-        <h2>Serviço concluído com sucesso!</h2>
-        <p class="muted">Confira os dados abaixo antes de concluir a ordem de serviço.</p>
-      </div>
-      <div class="card">
-        <h3>E-mail do cliente</h3>
-        <label for="email">Endereço de e-mail</label>
-        <input id="email" class="field" type="email" v-model.trim="email" placeholder="cliente@email.com">
-        <p class="muted">O cliente poderá receber um formulário de avaliação neste endereço.</p>
-      </div>
-      <div class="card">
-        <div class="row"><h3>Resumo da execução</h3><span class="pill">100% finalizado</span></div>
-        <p><strong>Instalação de janelas</strong></p>
-        <p class="muted">Ordem de serviço #{{ route.params.id }}</p>
-      </div>
-      <div class="actions">
-        <button class="primary" @click="concluir">Enviar avaliação e concluir ✓</button>
-        <button class="secondary" @click="router.push('/agenda')">Voltar para agenda inicial</button>
+      <p v-if="carregando" class="feedback">Carregando...</p>
+
+      <div v-else-if="!obra" class="erro">
+        {{ erro || 'Obra não encontrada.' }}
+        <button class="secondary" @click="carregar">Tentar novamente</button>
       </div>
 
+      <template v-else-if="concluida">
+        <div class="card success" style="text-align:center;padding:25px 16px">
+          <div style="font-size:34px">✓</div>
+          <h2>Serviço concluído com sucesso!</h2>
+          <p class="muted">A ordem de serviço #{{ id }} foi registrada como concluída.</p>
+        </div>
+        <div class="actions">
+          <button class="primary" @click="router.push('/agenda')">Voltar para agenda inicial</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="card">
+          <div class="row"><span class="eyebrow">OS #{{ id }}</span><span class="pill" :class="faltando ? 'pill-warn' : ''">{{ percentual }}% instalado</span></div>
+          <h2>Conferir e concluir</h2>
+          <p class="muted">Confira os dados abaixo antes de concluir a ordem de serviço.</p>
+        </div>
+
+        <div v-if="faltando" class="notice warning" style="margin-bottom:13px">
+          Ainda há itens do checklist sem conferência ({{ feitos }}/{{ total }}).
+          <button class="secondary" @click="router.push({ name: 'ExecucaoOS', params: { id } })">Voltar ao checklist</button>
+        </div>
+
+        <div class="card">
+          <h3>E-mail do cliente</h3>
+          <label for="email">Endereço de e-mail</label>
+          <input id="email" class="field" type="email" v-model.trim="email" placeholder="cliente@email.com" />
+          <p class="muted">O e-mail fica salvo no cadastro do cliente para o envio da avaliação.</p>
+        </div>
+
+        <div class="card">
+          <div class="row"><h3>Resumo da execução</h3><span class="pill">{{ feitos }}/{{ total }} itens</span></div>
+          <p><strong>{{ obra.orcamento?.nomeCliente ?? `Obra #${id}` }}</strong></p>
+          <p class="muted">{{ obra.orcamento?.enderecoObra || 'Endereço não informado' }}</p>
+        </div>
+
+        <div v-if="erro" class="erro">{{ erro }}</div>
+
+        <div class="actions">
+          <button class="primary" :disabled="salvando || faltando" @click="concluir">{{ salvando ? 'Salvando...' : 'Concluir ordem de serviço ✓' }}</button>
+          <button class="secondary" @click="router.push('/agenda')">Voltar para agenda inicial</button>
+        </div>
+      </template>
     </section>
   </main>
 </template>
@@ -89,5 +159,11 @@ label{font-size:11px;font-weight:750;display:block;margin:12px 0 7px}
 .step-icon{width:34px;height:34px;border-radius:10px;background:#edf2fa;color:#203f91;display:grid;place-items:center;font-weight:800}
 .actions{position:sticky;bottom:0;background:#f3f6fb;padding:12px 0 max(12px,env(safe-area-inset-bottom))}
 @media(min-width:769px){.mobile-page{max-width:480px;margin:20px auto;min-height:calc(100vh - 40px);border-radius:22px;overflow:hidden;box-shadow:0 8px 35px #17233d18}.content{padding:0 16px}}
+.primary:disabled,.danger:disabled,.secondary:disabled{opacity:.5;cursor:not-allowed}
+.erro{background:#fff0f0;border:1px solid #ffd0d3;color:#b33b42;border-radius:13px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:13px}
+.pill-warn{background:#fff3dc;color:#a66a00}
+.pill-gray{background:#edf1f7;color:#5d6b85}
+.feedback{text-align:center;color:#8491a7;font-size:12px;padding:24px 0}
+a.secondary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 </style>
 

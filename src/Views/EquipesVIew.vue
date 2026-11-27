@@ -180,6 +180,18 @@ const tecnicos = listaUsuarios.filter(
           assigned: equipeVinculada ? [{ ...equipeVinculada }] : [],
         }))
 
+        // Orçamento sem itens: cria um item único "obra completa" para ser possível designar a equipe
+        if (items.length === 0) {
+          items.push({
+            id: 'item-obra',
+            rawItemId: 0,
+            title: 'Instalação completa da obra',
+            subtitle: 'Nenhum item cadastrado no orçamento',
+            iconType: 'window',
+            assigned: equipeVinculada ? [{ ...equipeVinculada }] : [],
+          })
+        }
+
         const ano = (p.dataInicioContrato || '2026').slice(0, 4)
         return {
           id: `#ORD-${ano}-${String(p.id).padStart(3, '0')}`,
@@ -188,7 +200,7 @@ const tecnicos = listaUsuarios.filter(
           tecnicoId: p.tecnicoId ?? null,
           client: orc?.nomeCliente || `Cliente #${p.orcamentoId}`,
           workplace: orc?.enderecoObra || `Obra Orçamento #${p.orcamentoId}`,
-          itemsCountLabel: `${String(items.length).padStart(2, '0')} Itens`,
+          itemsCountLabel: `${String(itensApi.length).padStart(2, '0')} Itens`,
           updatedAt: tempoRelativo(p.dataMedicaoFinal || p.dataInicioContrato),
           badge: temPendencia ? 'URGENTE' : undefined,
           totalSlots: Math.max(1, items.length),
@@ -364,14 +376,18 @@ async function confirmarAlocacao() {
       primeiraEquipe?.membros.find((m) => m.funcaoNaEquipe === 'Líder') ??
       primeiraEquipe?.membros[0]
 
+    if (!liderOuPrimeiroMembro) {
+      exibirFeedback('Aloque uma equipe (com pelo menos 1 técnico) antes de confirmar.')
+      return
+    }
+
     // Vincula o líder da equipe ao Projeto
-    await fetch(`${API_URL}/projeto/${proj.rawId}`, {
+    const resProjeto = await fetch(`${API_URL}/projeto/${proj.rawId}`, {
       method: 'PUT',
       headers,
-      body: JSON.stringify({
-        tecnicoId: liderOuPrimeiroMembro ? liderOuPrimeiroMembro.usuarioId : null,
-      }),
+      body: JSON.stringify({ tecnicoId: liderOuPrimeiroMembro.usuarioId }),
     })
+    if (!resProjeto.ok) throw new Error(`A API recusou a designação (erro ${resProjeto.status}).`)
 
     // Registra no histórico da obra quais equipes/técnicos foram designados
     const resumo = proj.items

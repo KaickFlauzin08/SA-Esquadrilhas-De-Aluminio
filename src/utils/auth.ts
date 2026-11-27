@@ -13,7 +13,7 @@ let tokenMemoria: string | null = null
 // "ref" faz as telas atualizarem sozinhas quando o perfil muda (nome no topo, por exemplo)
 const usuarioMemoria = ref<UsuarioLogado | null>(null)
 
-export function setSessao(token: string, usuario: UsuarioLogado): void {
+export function setSessao(token: string, usuario: UsuarioLogado, _lembrar?: boolean): void {
   tokenMemoria = token
   usuarioMemoria.value = usuario
 }
